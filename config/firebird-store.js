@@ -65,8 +65,8 @@ async function registerCustomer({ fullName, roleJob, phone, departmentId }) {
   };
 }
 
-async function getDashboard(agentId) {
-  const ticketQuery = (where, params = [], limit = '') => query(`
+async function getDashboard(agentId, departmentId, isAdmin = false) {
+  const ticketQuery = (where, params = [], orderBy = 'T.UPDATED_AT DESC', limit = '') => query(`
     SELECT
       T.ID,
       T.STATUS,
@@ -81,14 +81,16 @@ async function getDashboard(agentId) {
     INNER JOIN CUSTOMERS C ON C.ID = T.CUSTOMER_ID
     INNER JOIN DEPARTMENTS D ON D.ID = T.DEPARTMENT_ID
     WHERE ${where}
-    ORDER BY ${where === "T.STATUS = 'WAITING'" ? 'T.CREATED_AT ASC' : 'T.UPDATED_AT DESC'}
+    ORDER BY ${orderBy}
     ${limit}
   `, params).then(normalizeRows);
 
   const [waiting, myTickets, closed] = await Promise.all([
-    ticketQuery("T.STATUS = 'WAITING'"),
+    isAdmin
+      ? ticketQuery("T.STATUS = 'WAITING'", [], 'T.CREATED_AT ASC')
+      : ticketQuery("T.STATUS = 'WAITING' AND T.DEPARTMENT_ID = ?", [departmentId], 'T.CREATED_AT ASC'),
     ticketQuery("T.STATUS = 'IN_PROGRESS' AND T.ASSIGNED_AGENT_ID = ?", [agentId]),
-    ticketQuery("T.STATUS = 'CLOSED'", [], 'ROWS 20')
+    ticketQuery("T.STATUS = 'CLOSED' AND T.ASSIGNED_AGENT_ID = ?", [agentId], 'T.UPDATED_AT DESC', 'ROWS 20')
   ]);
 
   return { waiting, myTickets, closed };
@@ -96,7 +98,13 @@ async function getDashboard(agentId) {
 
 async function getTicketAccess(ticketId) {
   const rows = normalizeRows(
-    await query('SELECT CUSTOMER_ID, ASSIGNED_AGENT_ID, STATUS FROM TICKETS WHERE ID = ?', [ticketId])
+    await query(
+      `SELECT T.CUSTOMER_ID, T.ASSIGNED_AGENT_ID, T.STATUS, T.DEPARTMENT_ID, D.NAME AS DEPARTMENT_NAME
+       FROM TICKETS T
+       INNER JOIN DEPARTMENTS D ON D.ID = T.DEPARTMENT_ID
+       WHERE T.ID = ?`,
+      [ticketId]
+    )
   );
   const ticket = rows[0];
 
@@ -107,8 +115,39 @@ async function getTicketAccess(ticketId) {
   return {
     customerId: ticket.CUSTOMER_ID,
     assignedAgentId: ticket.ASSIGNED_AGENT_ID,
-    status: ticket.STATUS
+    status: ticket.STATUS,
+    departmentId: ticket.DEPARTMENT_ID,
+    departmentName: ticket.DEPARTMENT_NAME
   };
+}
+
+async function transferTicket(ticketId, departmentId) {
+  await query(
+    `UPDATE TICKETS
+     SET DEPARTMENT_ID = ?, ASSIGNED_AGENT_ID = NULL, STATUS = 'WAITING', UPDATED_AT = CURRENT_TIMESTAMP
+     WHERE ID = ?`,
+    [departmentId, ticketId]
+  );
+  return getTicketAccess(ticketId);
+}
+
+async function getMessages(ticketId) {
+  const rows = normalizeRows(await query(
+    `SELECT ID, TICKET_ID, SENDER_TYPE, SENDER_ID, MESSAGE_TEXT, CREATED_AT
+     FROM MESSAGES
+     WHERE TICKET_ID = ?
+     ORDER BY CREATED_AT ASC`,
+    [ticketId]
+  ));
+
+  return rows.map((row) => ({
+    id: row.ID,
+    ticketId: row.TICKET_ID,
+    senderType: row.SENDER_TYPE,
+    senderId: row.SENDER_ID,
+    messageText: row.MESSAGE_TEXT,
+    createdAt: row.CREATED_AT
+  }));
 }
 
 module.exports = {
@@ -135,6 +174,8 @@ module.exports = {
      WHERE ID = ?`,
     [agentId || null, ticketId]
   ),
+  transferTicket,
+  getMessages,
   createMessage: async ({ ticketId, senderType, senderId, text }) => {
     const result = normalizeRows(
       await query(

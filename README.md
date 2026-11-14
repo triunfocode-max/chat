@@ -52,8 +52,21 @@ Depois execute o conteúdo do arquivo `sql/firebird_schema.sql` com um cliente F
 
 - E-mail: `admin@empresa.com`
 - Senha: `admin123`
+- Financeiro: `financeiro@empresa.com` / `financeiro123`
+- Suporte Técnico: `suporte@empresa.com` / `suporte12345`
+- Vendas: `vendas@empresa.com` / `vendas12345`
 
 Essas credenciais são somente para desenvolvimento local. Em produção, configure `ADMIN_EMAIL` e `ADMIN_PASSWORD` com valores próprios e uma senha de pelo menos 12 caracteres. O painel usa uma sessão protegida por cookie; as rotas dos atendimentos e o chat exigem autenticação.
+
+Na página inicial, o colaborador abre um chamado com nome, cargo, telefone e setor. O atendente entra pelo painel do seu setor, assume chamados da fila, conversa com o colaborador e pode transferir o chamado para outro setor. Chamados transferidos voltam à fila do setor de destino sem perder o histórico de mensagens.
+
+Para configurar os atendentes do modo em memória, defina `AGENTS_JSON` como uma lista JSON de objetos com `name`, `email`, `password` e `departmentId`. Em produção, não há atendentes de demonstração e a senha de cada atendente precisa ter pelo menos 12 caracteres. Por exemplo:
+
+```env
+AGENTS_JSON=[{"name":"Atendente Financeiro","email":"financeiro@empresa.com","password":"defina-uma-senha-forte","departmentId":2},{"name":"Atendente de Vendas","email":"vendas@empresa.com","password":"defina-outra-senha-forte","departmentId":4}]
+```
+
+Use um e-mail único e uma senha própria de pelo menos 12 caracteres por atendente em produção. Os IDs dos setores iniciais são: Atendimento `1`, Financeiro `2`, Suporte Técnico `3` e Vendas `4`.
 
 ## Executando a aplicação
 
@@ -68,12 +81,9 @@ O sistema estará disponível em:
 
 ## Publicar no Render
 
-O arquivo `render.yaml` configura o serviço web com Socket.IO, armazenamento em memória e verificação de saúde. Para publicar:
+Crie um serviço **Web Service** ligado ao repositório do projeto, usando runtime Node, comando de build `npm ci` e comando de início `npm start`. Configure as variáveis `NODE_ENV=production`, `STORAGE=memory`, `ADMIN_EMAIL` e `ADMIN_PASSWORD` próprios. `ADMIN_PASSWORD` precisa ter pelo menos 12 caracteres. Defina também `AGENTS_JSON` com uma lista de atendentes e os respectivos setores; não use as contas de demonstração.
 
-1. Envie somente a pasta deste projeto para um repositório Git seu. Não envie `.env` nem `node_modules` (o `.gitignore` já os exclui).
-2. No Render, crie um **Blueprint** e conecte esse repositório; o Render encontrará o `render.yaml`.
-3. Quando solicitado, informe `ADMIN_EMAIL` e `ADMIN_PASSWORD` próprios. Em produção, a senha precisa ter pelo menos 12 caracteres; não use as credenciais de demonstração.
-4. Após o deploy, compartilhe o endereço do serviço. A tela do cliente fica na raiz (`/`) e o painel fica em `/admin.html`.
+Não envie o arquivo local `.env` nem a pasta `node_modules` ao repositório. Após o deploy, compartilhe o endereço do serviço: a tela do colaborador fica na raiz (`/`) e o painel do atendente em `/admin.html`.
 
 O serviço precisa permanecer com uma única instância para que a memória e as conexões em tempo real sejam compartilhadas. O plano gratuito do Render pode suspender o serviço quando estiver ocioso e reiniciá-lo; qualquer reinício ou novo deploy apaga os atendimentos armazenados em memória. Use um banco persistente antes de depender do sistema para guardar atendimentos reais.
 

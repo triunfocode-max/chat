@@ -3,88 +3,120 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Painel do Atendente</title>
+    <title>MultiAtende | Painel do atendente</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body { font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+      .brand-gradient { background: linear-gradient(120deg, #53698f, #40577f); }
+      .scroll-soft { scrollbar-color: #cbd5e1 transparent; }
+      .message-scroll { scrollbar-color: #cbd5e1 transparent; }
+    </style>
   </head>
-  <body class="bg-slate-100 min-h-screen p-4">
-    <div class="max-w-7xl mx-auto">
-      <div id="loginPanel" class="max-w-md mx-auto bg-white rounded-2xl shadow-lg p-6 mt-10">
-        <h1 class="text-2xl font-bold text-slate-800 mb-2">Login do atendente</h1>
-        <p class="text-slate-600 mb-2">Acesse o painel de atendimento.</p>
-        <p class="text-sm text-amber-700 mb-6">Modo em memória: os atendimentos serão apagados quando o servidor for reiniciado.</p>
-
-        <form id="loginForm" class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">E-mail</label>
-            <input id="agentEmail" type="email" required class="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500" />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-slate-700 mb-1">Senha</label>
-            <input id="agentPassword" type="password" required class="w-full border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500" />
-          </div>
-
-          <button type="submit" class="w-full bg-sky-600 text-white py-3 rounded-lg font-semibold hover:bg-sky-700 transition-colors">
-            Entrar
-          </button>
+  <body class="min-h-screen bg-[#f5f7fb] text-slate-800">
+    <section id="loginPanel" class="flex min-h-screen items-center justify-center px-4 py-10">
+      <div class="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+        <div class="brand-gradient px-8 py-7 text-white">
+          <a href="/" class="text-sm text-white/75 hover:text-white">← MultiAtende</a>
+          <div class="mt-6 grid h-12 w-12 place-items-center rounded-xl bg-white/15 text-2xl">👩‍💻</div>
+          <h1 class="mt-4 text-2xl font-bold">Acesso do atendente</h1>
+          <p class="mt-1 text-sm text-white/75">Entre para acessar a fila do seu setor.</p>
+        </div>
+        <form id="loginForm" class="space-y-5 p-8">
+          <label class="block">
+            <span class="mb-1.5 block text-sm font-semibold">E-mail</span>
+            <input id="agentEmail" type="email" autocomplete="username" required class="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100" placeholder="voce@empresa.com" />
+          </label>
+          <label class="block">
+            <span class="mb-1.5 block text-sm font-semibold">Senha</span>
+            <input id="agentPassword" type="password" autocomplete="current-password" required class="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100" placeholder="Sua senha" />
+          </label>
+          <p id="loginError" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+          <button id="loginButton" type="submit" class="w-full rounded-xl bg-[#40577f] py-3 font-semibold text-white transition hover:bg-[#334a73] disabled:opacity-60">Entrar no painel</button>
         </form>
       </div>
+    </section>
 
-      <div id="dashboardPanel" class="hidden">
-        <div class="flex justify-between items-center mb-6">
-          <div>
-            <p class="text-sm text-sky-700 uppercase tracking-wide font-bold">Painel interno</p>
-            <h1 class="text-3xl font-bold text-slate-800">Multi-atendimento</h1>
+    <section id="dashboardPanel" class="hidden min-h-screen">
+      <header class="brand-gradient flex h-16 items-center justify-between px-4 text-white md:px-6">
+        <a href="/" class="flex items-center gap-2 font-bold"><span class="grid h-9 w-9 place-items-center rounded-xl bg-white/15 text-lg">M</span>MultiAtende</a>
+        <div class="flex items-center gap-3">
+          <div class="hidden text-right sm:block">
+            <p id="agentName" class="text-sm font-semibold">Atendente</p>
+            <p id="agentDepartment" class="text-xs text-white/70">Setor</p>
           </div>
-          <button id="logoutBtn" class="bg-slate-800 text-white px-4 py-2 rounded-lg hover:bg-slate-700">Sair</button>
+          <button id="logoutBtn" class="rounded-lg border border-white/25 px-3 py-2 text-sm hover:bg-white/10">Sair</button>
         </div>
+      </header>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <section class="bg-white rounded-2xl p-4 shadow-md">
-            <div class="flex items-center justify-between mb-3">
-              <h2 class="text-lg font-bold text-slate-800">Aguardando</h2>
-              <span id="waitingCount" class="bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full text-xs font-semibold">0</span>
+      <main class="mx-auto max-w-[1600px] p-3 md:p-5">
+        <div class="grid min-h-[calc(100vh-108px)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:grid-cols-[320px_minmax(0,1fr)]">
+          <aside class="flex min-h-[360px] flex-col border-b border-slate-200 lg:border-b-0 lg:border-r">
+            <div class="border-b border-slate-100 p-4">
+              <div class="flex items-center justify-between">
+                <h1 class="text-lg font-bold">Conversas</h1>
+                <span class="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-semibold text-sky-700"><span id="totalCount">0</span> chamados</span>
+              </div>
+              <label class="mt-4 block">
+                <span class="sr-only">Pesquisar chamados</span>
+                <input id="searchInput" type="search" placeholder="Pesquisar nome ou telefone..." class="w-full rounded-full border border-slate-300 px-4 py-2.5 text-sm outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100" />
+              </label>
+              <div class="mt-3 flex gap-2">
+                <button data-filter="mine" class="filterButton rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">Minhas</button>
+                <button data-filter="queue" class="filterButton rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800">Fila</button>
+                <button data-filter="closed" class="filterButton rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">Concluídos</button>
+              </div>
             </div>
-            <div id="waitingList" class="space-y-3"></div>
-          </section>
+            <div id="ticketList" class="scroll-soft flex-1 space-y-2 overflow-y-auto p-3"></div>
+          </aside>
 
-          <section class="bg-white rounded-2xl p-4 shadow-md">
-            <div class="flex items-center justify-between mb-3">
-              <h2 class="text-lg font-bold text-slate-800">Meus atendimentos</h2>
-              <span id="activeCount" class="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs font-semibold">0</span>
+          <section class="flex min-h-[65vh] flex-col bg-[#f8faff]">
+            <div id="emptyConversation" class="flex flex-1 flex-col items-center justify-center px-6 text-center">
+              <span class="grid h-16 w-16 place-items-center rounded-full bg-white text-3xl shadow-sm">💬</span>
+              <h2 class="mt-4 font-semibold text-slate-700">Selecione uma conversa</h2>
+              <p class="mt-1 max-w-xs text-sm text-slate-500">Chamados direcionados para o seu setor aparecem na fila.</p>
             </div>
-            <div id="activeList" class="space-y-3"></div>
-          </section>
-
-          <section class="bg-white rounded-2xl p-4 shadow-md">
-            <div class="flex items-center justify-between mb-3">
-              <h2 class="text-lg font-bold text-slate-800">Concluídos</h2>
-              <span id="closedCount" class="bg-slate-200 text-slate-700 px-2 py-1 rounded-full text-xs font-semibold">0</span>
+            <div id="conversationPanel" class="hidden min-h-0 flex-1 flex-col">
+              <header class="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 md:px-6">
+                <div class="flex min-w-0 items-center gap-3">
+                  <span class="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-sky-100 font-bold text-sky-800">C</span>
+                  <div class="min-w-0">
+                    <h2 id="chatTitle" class="truncate font-bold">Conversa</h2>
+                    <p id="chatSubtitle" class="truncate text-xs text-slate-500">Chamado</p>
+                  </div>
+                </div>
+                <div class="flex shrink-0 items-center gap-2">
+                  <button id="assignTicketBtn" class="hidden rounded-lg bg-sky-700 px-3 py-2 text-xs font-semibold text-white hover:bg-sky-800">Assumir chamado</button>
+                  <button id="transferTicketBtn" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Transferir</button>
+                  <button id="finishTicketBtn" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50">Encerrar</button>
+                </div>
+              </header>
+              <div id="drawerMessages" class="message-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 md:p-6"></div>
+              <form id="agentChatForm" class="flex gap-2 border-t border-slate-200 bg-white p-3 md:p-4">
+                <input id="agentMessageInput" type="text" maxlength="1000" disabled class="min-w-0 flex-1 rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-100" placeholder="Escreva uma mensagem..." />
+                <button id="sendAgentMessage" type="submit" disabled class="rounded-xl bg-sky-700 px-5 font-semibold text-white hover:bg-sky-800 disabled:opacity-50">Enviar</button>
+              </form>
             </div>
-            <div id="closedList" class="space-y-3"></div>
           </section>
         </div>
-      </div>
-    </div>
+      </main>
+    </section>
 
-    <div id="chatDrawer" class="fixed right-4 bottom-4 w-[420px] bg-white shadow-2xl rounded-2xl overflow-hidden hidden border border-slate-200">
-      <div class="bg-sky-600 text-white p-3 flex justify-between items-center">
-        <div>
-          <p class="text-xs uppercase tracking-wide opacity-80">Conversa</p>
-          <h3 id="chatTitle" class="font-bold">Ticket</h3>
+    <div id="transferDialog" class="fixed inset-0 z-10 hidden items-center justify-center bg-slate-900/40 p-4">
+      <section class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+        <div class="flex items-start justify-between">
+          <div><h2 class="text-lg font-bold">Transferir chamado</h2><p class="mt-1 text-sm text-slate-500">Selecione o setor que receberá a conversa.</p></div>
+          <button id="cancelTransferTop" class="rounded-lg px-2 py-1 text-xl text-slate-400 hover:bg-slate-100">×</button>
         </div>
-        <button id="closeChatDrawer" class="text-white font-bold">×</button>
-      </div>
-
-      <div id="drawerMessages" class="h-64 overflow-y-auto p-3 space-y-2 bg-slate-50"></div>
-
-      <div class="p-3 border-t border-slate-200">
-        <form id="agentChatForm" class="flex gap-2">
-          <input id="agentMessageInput" type="text" class="flex-1 border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-sky-500" placeholder="Mensagem..." />
-          <button type="submit" class="bg-sky-600 text-white px-3 py-2 rounded-lg font-semibold hover:bg-sky-700">Enviar</button>
-        </form>
-        <button id="finishTicketBtn" class="mt-3 w-full bg-red-600 text-white py-2 rounded-lg font-semibold hover:bg-red-700">Encerrar atendimento</button>
-      </div>
+        <label class="mt-5 block">
+          <span class="mb-1.5 block text-sm font-semibold">Setor de destino</span>
+          <select id="transferDepartment" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100"></select>
+        </label>
+        <p id="transferError" class="mt-3 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="cancelTransfer" class="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">Cancelar</button>
+          <button id="confirmTransfer" class="rounded-xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800">Transferir</button>
+        </div>
+      </section>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>

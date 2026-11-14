@@ -78,7 +78,7 @@ app.get('/api/departments', async (req, res) => {
   }
 });
 
-app.post('/api/departments', async (req, res) => {
+app.post('/api/departments', requireAgent, async (req, res) => {
   try {
     const name = String(req.body.name || '').trim();
 
@@ -104,8 +104,8 @@ app.post('/api/customers/register', async (req, res) => {
     const phone = String(req.body.phone || '').trim();
     const departmentId = Number(req.body.departmentId);
 
-    if (!fullName || !phone || !departmentId) {
-      return res.status(400).json({ message: 'Nome, telefone e departamento são obrigatórios.' });
+    if (!fullName || !roleJob || !phone || !departmentId) {
+      return res.status(400).json({ message: 'Nome, cargo, telefone e departamento são obrigatórios.' });
     }
 
     const registration = await store.registerCustomer({
@@ -156,6 +156,7 @@ app.post('/api/agents/login', async (req, res) => {
       return res.status(401).json({ message: 'Credenciais inválidas.' });
     }
 
+    agent.IS_ADMIN = Boolean(agent.IS_ADMIN) || email.toLowerCase() === String(process.env.ADMIN_EMAIL || 'admin@empresa.com').toLowerCase();
     const token = randomBytes(32).toString('hex');
     sessions.set(token, {
       agent,
@@ -169,7 +170,8 @@ app.post('/api/agents/login', async (req, res) => {
         id: agent.ID,
         name: agent.NAME,
         email: agent.EMAIL,
-        departmentId: agent.DEPARTMENT_ID
+        departmentId: agent.DEPARTMENT_ID,
+        isAdmin: agent.IS_ADMIN
       }
     });
   } catch (error) {
@@ -193,9 +195,18 @@ app.post('/api/agents/logout', (req, res) => {
 
 app.get('/api/tickets/dashboard', requireAgent, async (req, res) => {
   try {
-    const agentId = Number(req.query.agentId || 0);
-
-    return res.json(await store.getDashboard(agentId));
+    const agentId = Number(req.agent.ID);
+    const departmentId = Number(req.agent.DEPARTMENT_ID || 0);
+    const isAdmin = Boolean(req.agent.IS_ADMIN);
+    const dashboard = await store.getDashboard(agentId, departmentId, isAdmin);
+    return res.json({
+      ...dashboard,
+      departmentId,
+      isAdmin,
+      departmentName: isAdmin
+        ? 'Todos os setores'
+        : (await store.listDepartments()).find((department) => Number(department.ID) === departmentId)?.NAME || 'Setor'
+    });
   } catch (error) {
     return res.status(500).json({ message: 'Erro ao consultar fila de atendimento', error: error.message });
   }
@@ -210,10 +221,25 @@ app.post('/api/tickets/:id/assign', requireAgent, async (req, res) => {
       return res.status(400).json({ message: 'Ticket e agente são obrigatórios.' });
     }
 
+    const ticket = await store.getTicketAccess(ticketId);
+    if (
+      !ticket
+      || ticket.status !== 'WAITING'
+      || (!req.agent.IS_ADMIN && Number(ticket.departmentId) !== Number(req.agent.DEPARTMENT_ID))
+    ) {
+      return res.status(409).json({ message: 'Este chamado não está mais disponível na fila do seu setor.' });
+    }
+
     await store.assignTicket(ticketId, agentId);
 
     io.emit('tickets:updated');
-    io.to(`ticket:${ticketId}`).emit('ticket:status-updated', { ticketId, status: 'IN_PROGRESS', agentId });
+    io.to(`ticket:${ticketId}`).emit('ticket:status-updated', {
+      ticketId,
+      status: 'IN_PROGRESS',
+      departmentId: ticket.departmentId,
+      departmentName: ticket.departmentName,
+      agentId
+    });
 
     return res.json({ success: true, ticketId, status: 'IN_PROGRESS', agentId });
   } catch (error) {
@@ -230,6 +256,11 @@ app.post('/api/tickets/:id/close', requireAgent, async (req, res) => {
       return res.status(400).json({ message: 'Ticket é obrigatório.' });
     }
 
+    const ticket = await store.getTicketAccess(ticketId);
+    if (!ticket || Number(ticket.assignedAgentId) !== agentId) {
+      return res.status(403).json({ message: 'Somente o atendente responsável pode encerrar este chamado.' });
+    }
+
     await store.closeTicket(ticketId, agentId);
 
     io.emit('tickets:updated');
@@ -241,10 +272,78 @@ app.post('/api/tickets/:id/close', requireAgent, async (req, res) => {
   }
 });
 
+app.post('/api/tickets/:id/transfer', requireAgent, async (req, res) => {
+  try {
+    const ticketId = Number(req.params.id);
+    const departmentId = Number(req.body.departmentId);
+
+    if (!ticketId || !departmentId) {
+      return res.status(400).json({ message: 'Chamado e setor de destino são obrigatórios.' });
+    }
+
+    const [ticket, departments] = await Promise.all([
+      store.getTicketAccess(ticketId),
+      store.listDepartments()
+    ]);
+    const targetDepartment = departments.find((department) => Number(department.ID) === departmentId);
+
+    if (!ticket || !targetDepartment) {
+      return res.status(404).json({ message: 'Chamado ou setor não encontrado.' });
+    }
+
+    const isAssignedToAgent = Number(ticket.assignedAgentId) === Number(req.agent.ID);
+    const isWaitingInAgentDepartment = ticket.status === 'WAITING'
+      && (req.agent.IS_ADMIN || Number(ticket.departmentId) === Number(req.agent.DEPARTMENT_ID));
+    if (ticket.status === 'CLOSED' || (!isAssignedToAgent && !isWaitingInAgentDepartment)) {
+      return res.status(403).json({ message: 'Você não pode transferir este chamado.' });
+    }
+    if (Number(ticket.departmentId) === departmentId) {
+      return res.status(400).json({ message: 'Selecione um setor diferente do atual.' });
+    }
+
+    const updatedTicket = await store.transferTicket(ticketId, departmentId);
+    io.to(`ticket:${ticketId}`).emit('ticket:status-updated', {
+      ticketId,
+      status: 'WAITING',
+      departmentId,
+      departmentName: targetDepartment.NAME,
+      transferred: true
+    });
+    io.emit('tickets:updated');
+
+    return res.json({
+      success: true,
+      ticketId,
+      status: updatedTicket.status,
+      departmentId,
+      departmentName: targetDepartment.NAME
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Erro ao transferir chamado', error: error.message });
+  }
+});
+
+app.get('/api/tickets/:id/messages', requireAgent, async (req, res) => {
+  try {
+    const ticketId = Number(req.params.id);
+    const ticket = await store.getTicketAccess(ticketId);
+    if (!ticket || (
+      Number(ticket.assignedAgentId) !== Number(req.agent.ID)
+      && !(ticket.status === 'WAITING' && Number(ticket.departmentId) === Number(req.agent.DEPARTMENT_ID))
+    )) {
+      return res.status(403).json({ message: 'Você não tem acesso às mensagens deste chamado.' });
+    }
+
+    return res.json(await store.getMessages(ticketId));
+  } catch (error) {
+    return res.status(500).json({ message: 'Erro ao carregar mensagens', error: error.message });
+  }
+});
+
 io.on('connection', (socket) => {
   socket.data.customerTickets = new Set();
 
-  socket.on('join-ticket', async ({ ticketId, accessToken }) => {
+  socket.on('join-ticket', async ({ ticketId, accessToken } = {}) => {
     const parsedTicketId = Number(ticketId);
 
     if (!parsedTicketId) {

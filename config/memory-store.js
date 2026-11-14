@@ -10,13 +10,55 @@ const departments = [
   { ID: 3, NAME: 'Suporte Técnico' },
   { ID: 4, NAME: 'Vendas' }
 ];
-const agents = [{
+const defaultAgent = {
   ID: 1,
   NAME: 'Atendente Admin',
   EMAIL: process.env.ADMIN_EMAIL || 'admin@empresa.com',
   PASSWORD_HASH: bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin123', 10),
-  DEPARTMENT_ID: 1
-}];
+  DEPARTMENT_ID: Number(process.env.ADMIN_DEPARTMENT_ID || 1),
+  IS_ADMIN: true
+};
+const configuredAgents = process.env.AGENTS_JSON ? JSON.parse(process.env.AGENTS_JSON) : [];
+
+if (!Array.isArray(configuredAgents)) {
+  throw new Error('AGENTS_JSON deve conter uma lista JSON de atendentes.');
+}
+
+const demoAgents = process.env.NODE_ENV === 'production' || configuredAgents.length > 0
+  ? []
+  : [
+    { name: 'Atendente Financeiro', email: 'financeiro@empresa.com', password: 'financeiro123', departmentId: 2 },
+    { name: 'Atendente Suporte', email: 'suporte@empresa.com', password: 'suporte12345', departmentId: 3 },
+    { name: 'Atendente Vendas', email: 'vendas@empresa.com', password: 'vendas12345', departmentId: 4 }
+  ];
+
+const agents = [defaultAgent, ...[...demoAgents, ...configuredAgents].map((agent, index) => {
+  const departmentId = Number(agent.departmentId);
+  const email = String(agent.email || '').trim();
+  const password = String(agent.password || '');
+
+  if (
+    !String(agent.name || '').trim()
+    || !email
+    || password.length < (process.env.NODE_ENV === 'production' ? 12 : 1)
+    || !departments.some((department) => department.ID === departmentId)
+  ) {
+    throw new Error(`Atendente inválido na posição ${index + 1} da configuração de atendentes.`);
+  }
+
+  return {
+    ID: index + 2,
+    NAME: String(agent.name).trim(),
+    EMAIL: email,
+    PASSWORD_HASH: bcrypt.hashSync(password, 10),
+    DEPARTMENT_ID: departmentId,
+    IS_ADMIN: false
+  };
+})];
+
+if (agents.some((agent, index) => agents.some((other, otherIndex) => index !== otherIndex && other.EMAIL.toLowerCase() === agent.EMAIL.toLowerCase()))) {
+  throw new Error('Os e-mails dos atendentes precisam ser únicos.');
+}
 const customers = [];
 const tickets = [];
 const messages = [];
@@ -74,7 +116,7 @@ function registerCustomer({ fullName, roleJob, phone, departmentId }) {
   };
 }
 
-function getDashboard(agentId) {
+function getDashboard(agentId, departmentId, isAdmin = false) {
   const departmentById = new Map(departments.map((department) => [department.ID, department]));
   const customerById = new Map(customers.map((customer) => [customer.ID, customer]));
   const ticketRows = tickets.map((ticket) => {
@@ -96,13 +138,13 @@ function getDashboard(agentId) {
 
   return {
     waiting: ticketRows
-      .filter((ticket) => ticket.STATUS === 'WAITING')
+      .filter((ticket) => ticket.STATUS === 'WAITING' && (isAdmin || ticket.DEPARTMENT_ID === departmentId))
       .sort((a, b) => a.CREATED_AT.localeCompare(b.CREATED_AT)),
     myTickets: ticketRows
       .filter((ticket) => ticket.STATUS === 'IN_PROGRESS' && tickets.find((item) => item.ID === ticket.ID).ASSIGNED_AGENT_ID === agentId)
       .sort((a, b) => b.UPDATED_AT.localeCompare(a.UPDATED_AT)),
     closed: ticketRows
-      .filter((ticket) => ticket.STATUS === 'CLOSED')
+      .filter((ticket) => ticket.STATUS === 'CLOSED' && tickets.find((item) => item.ID === ticket.ID).ASSIGNED_AGENT_ID === agentId)
       .sort((a, b) => b.UPDATED_AT.localeCompare(a.UPDATED_AT))
       .slice(0, 20)
   };
@@ -128,6 +170,20 @@ function closeTicket(ticketId, agentId) {
   }
 }
 
+function transferTicket(ticketId, departmentId) {
+  const ticket = tickets.find((item) => item.ID === ticketId);
+
+  if (!ticket || !departments.some((department) => department.ID === departmentId)) {
+    return null;
+  }
+
+  ticket.DEPARTMENT_ID = departmentId;
+  ticket.ASSIGNED_AGENT_ID = null;
+  ticket.STATUS = 'WAITING';
+  ticket.UPDATED_AT = new Date().toISOString();
+  return getTicketAccess(ticketId);
+}
+
 function createMessage({ ticketId, senderType, senderId, text }) {
   const message = {
     id: nextMessageId++,
@@ -141,6 +197,10 @@ function createMessage({ ticketId, senderType, senderId, text }) {
   return message;
 }
 
+function getMessages(ticketId) {
+  return messages.filter((message) => message.ticketId === ticketId);
+}
+
 function getTicketAccess(ticketId) {
   const ticket = tickets.find((item) => item.ID === ticketId);
 
@@ -151,7 +211,9 @@ function getTicketAccess(ticketId) {
   return {
     customerId: ticket.CUSTOMER_ID,
     assignedAgentId: ticket.ASSIGNED_AGENT_ID,
-    status: ticket.STATUS
+    status: ticket.STATUS,
+    departmentId: ticket.DEPARTMENT_ID,
+    departmentName: departments.find((department) => department.ID === ticket.DEPARTMENT_ID)?.NAME
   };
 }
 
@@ -164,5 +226,7 @@ module.exports = {
   getTicketAccess,
   assignTicket,
   closeTicket,
+  transferTicket,
+  getMessages,
   createMessage
 };

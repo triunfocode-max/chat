@@ -1,220 +1,219 @@
 const socket = io();
+const rolePanel = document.getElementById('rolePanel');
+const formPanel = document.getElementById('formPanel');
+const chatPanel = document.getElementById('chatPanel');
 const customerForm = document.getElementById('customerForm');
 const chatForm = document.getElementById('chatForm');
 const chatMessages = document.getElementById('chatMessages');
-const chatPanel = document.getElementById('chatPanel');
-const formPanel = document.getElementById('formPanel');
+const departmentSelect = document.getElementById('departmentId');
 const ticketIdLabel = document.getElementById('ticketIdLabel');
+const chatDepartment = document.getElementById('chatDepartment');
 const statusBadge = document.getElementById('statusBadge');
 const messageInput = document.getElementById('messageInput');
-const departmentSelect = document.getElementById('departmentId');
-const customDepartmentWrap = document.getElementById('customDepartmentWrap');
-const customDepartmentInput = document.getElementById('customDepartment');
+const sendButton = document.getElementById('sendButton');
+const chatNotice = document.getElementById('chatNotice');
+const formError = document.getElementById('formError');
+const startChatButton = document.getElementById('startChatButton');
 
 let currentTicket = null;
-let customerId = null;
+let joinedTicketId = null;
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (character) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  })[character]);
+function showPanel(panel) {
+  [rolePanel, formPanel, chatPanel].forEach((item) => item.classList.add('hidden'));
+  panel.classList.remove('hidden');
 }
 
-function toggleCustomDepartment() {
-  const isCustom = departmentSelect.value === 'custom';
-  customDepartmentWrap.classList.toggle('hidden', !isCustom);
+function addMessage(message) {
+  const item = document.createElement('div');
+  const isCustomer = String(message.senderType).toUpperCase() === 'CUSTOMER';
+  item.className = `max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm shadow-sm ${
+    isCustomer
+      ? 'ml-auto rounded-br-md bg-sky-700 text-white'
+      : 'mr-auto rounded-bl-md border border-slate-200 bg-white text-slate-700'
+  }`;
 
-  if (!isCustom) {
-    customDepartmentInput.value = '';
-  }
+  const sender = document.createElement('div');
+  sender.className = `mb-1 text-[10px] font-semibold uppercase tracking-wide ${isCustomer ? 'text-sky-100' : 'text-slate-400'}`;
+  sender.textContent = isCustomer ? 'Você' : 'Atendente';
+  const text = document.createElement('div');
+  text.textContent = message.messageText;
+  item.append(sender, text);
+  chatMessages.appendChild(item);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-async function createDepartmentIfNeeded(name) {
-  const response = await fetch('/api/departments', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name })
-  });
+function setStatus(status, departmentName, transferred = false) {
+  const labels = {
+    WAITING: ['Na fila', 'bg-amber-50 text-amber-700'],
+    IN_PROGRESS: ['Em atendimento', 'bg-emerald-50 text-emerald-700'],
+    CLOSED: ['Encerrado', 'bg-slate-100 text-slate-600']
+  };
+  const [label, classes] = labels[status] || ['Atualizado', 'bg-slate-100 text-slate-600'];
+  statusBadge.className = `rounded-full px-3 py-1.5 text-xs font-semibold ${classes}`;
+  statusBadge.textContent = label;
 
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.message || 'Erro ao cadastrar setor.');
+  if (departmentName) {
+    chatDepartment.textContent = departmentName;
   }
 
-  return Number(data.department.id);
+  if (transferred) {
+    chatNotice.textContent = `Seu chamado foi encaminhado para ${departmentName}.`;
+  } else if (status === 'IN_PROGRESS') {
+    chatNotice.textContent = `${departmentName || 'O setor'} iniciou seu atendimento.`;
+  } else if (status === 'WAITING') {
+    chatNotice.textContent = 'Seu chamado está aguardando um atendente.';
+  }
+
+  if (status === 'CLOSED') {
+    chatNotice.textContent = 'Este atendimento foi encerrado.';
+    messageInput.disabled = true;
+    sendButton.disabled = true;
+  }
 }
 
 async function loadDepartments() {
   const response = await fetch('/api/departments');
   const departments = await response.json();
+  if (!response.ok) {
+    throw new Error(departments.message || 'Não foi possível carregar os setores.');
+  }
 
-  departmentSelect.innerHTML = '<option value="">Selecione</option>';
+  departmentSelect.replaceChildren(new Option('Selecione o setor', ''));
   departments.forEach((department) => {
-    const option = document.createElement('option');
-    option.value = department.ID;
-    option.textContent = department.NAME;
-    departmentSelect.appendChild(option);
+    departmentSelect.add(new Option(department.NAME, department.ID));
   });
-
-  const customOption = document.createElement('option');
-  customOption.value = 'custom';
-  customOption.textContent = 'Outro (digitar setor)';
-  departmentSelect.appendChild(customOption);
-  departmentSelect.addEventListener('change', toggleCustomDepartment);
 }
 
-function setStatus(status) {
-  const map = {
-    WAITING: ['bg-yellow-100', 'text-yellow-700', 'Aguardando'],
-    IN_PROGRESS: ['bg-blue-100', 'text-blue-700', 'Atendente online'],
-    CLOSED: ['bg-slate-200', 'text-slate-700', 'Encerrado']
-  };
+document.getElementById('collaboratorChoice').addEventListener('click', () => {
+  showPanel(formPanel);
+  document.getElementById('fullName').focus();
+});
 
-  const [bg, text, label] = map[status] || ['bg-slate-200', 'text-slate-700', 'Sem status'];
-
-  statusBadge.className = `px-3 py-1 rounded-full text-xs font-semibold ${bg} ${text}`;
-  statusBadge.textContent = label;
-}
-
-function renderMessage(message) {
-  const item = document.createElement('div');
-  const isCustomer = String(message.senderType).toUpperCase() === 'CUSTOMER';
-
-  item.className = `max-w-[80%] rounded-xl px-3 py-2 ${
-    isCustomer ? 'ml-auto bg-sky-600 text-white' : 'bg-slate-100 text-slate-800'
-  }`;
-
-  const sender = document.createElement('div');
-  sender.className = 'text-[10px] uppercase tracking-wide opacity-75 mb-1';
-  sender.textContent = isCustomer ? 'Você' : 'Atendente';
-  const text = document.createElement('div');
-  text.textContent = message.messageText;
-  item.append(sender, text);
-
-  chatMessages.appendChild(item);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-function openChat() {
-  formPanel.classList.add('hidden');
-  chatPanel.classList.remove('hidden');
-}
-
-function showWaitingMessage() {
-  chatMessages.innerHTML = '<div class="text-sm text-slate-500 text-center mt-10">Aguardando a primeira resposta do atendimento...</div>';
-}
+document.getElementById('backToRoles').addEventListener('click', () => showPanel(rolePanel));
 
 customerForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  formError.classList.add('hidden');
+  startChatButton.disabled = true;
 
   try {
-    let departmentId = Number(departmentSelect.value);
-
-    if (departmentSelect.value === 'custom') {
-      const customName = customDepartmentInput.value.trim();
-
-      if (!customName) {
-        throw new Error('Informe o setor ou departamento que não aparece na lista.');
-      }
-
-      departmentId = await createDepartmentIfNeeded(customName);
-    }
-
-    if (!departmentId) {
-      throw new Error('Selecione um setor ou departamento.');
-    }
-
-    const payload = {
-      fullName: document.getElementById('fullName').value,
-      roleJob: document.getElementById('roleJob').value,
-      phone: document.getElementById('phone').value,
-      departmentId
-    };
-
     const response = await fetch('/api/customers/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        fullName: document.getElementById('fullName').value.trim(),
+        roleJob: document.getElementById('roleJob').value.trim(),
+        phone: document.getElementById('phone').value.trim(),
+        departmentId: Number(departmentSelect.value)
+      })
     });
-
     const data = await response.json();
-
     if (!response.ok) {
-      throw new Error(data.message || 'Erro ao iniciar atendimento.');
+      throw new Error(data.message || 'Não foi possível abrir o atendimento.');
     }
 
     currentTicket = data.ticket;
-    customerId = data.customer.id;
-
-    ticketIdLabel.textContent = currentTicket.id;
-    setStatus('WAITING');
-    showWaitingMessage();
-    openChat();
-
-    socket.emit('join-ticket', {
-      ticketId: currentTicket.id,
-      accessToken: currentTicket.accessToken
+    joinedTicketId = null;
+    ticketIdLabel.textContent = `#${currentTicket.id}`;
+    chatDepartment.textContent = departmentSelect.selectedOptions[0].textContent;
+    chatMessages.replaceChildren();
+    chatNotice.textContent = 'Conectando ao atendimento...';
+    addMessage({
+      senderType: 'AGENT',
+      messageText: 'Olá! Seu chamado foi criado. Um atendente do setor responderá em breve.'
     });
+    messageInput.value = '';
+    messageInput.disabled = true;
+    sendButton.disabled = true;
+    setStatus('WAITING', chatDepartment.textContent);
+    showPanel(chatPanel);
+    joinCurrentTicket();
   } catch (error) {
-    alert(error.message);
+    formError.textContent = error.message;
+    formError.classList.remove('hidden');
+  } finally {
+    startChatButton.disabled = false;
   }
 });
+
+function joinCurrentTicket() {
+  if (!currentTicket || !socket.connected) {
+    return;
+  }
+
+  socket.emit('join-ticket', {
+    ticketId: currentTicket.id,
+    accessToken: currentTicket.accessToken
+  });
+}
 
 chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
-
-  if (!currentTicket) {
-    return;
-  }
-
   const text = messageInput.value.trim();
-
-  if (!text) {
+  if (!currentTicket || !text || !joinedTicketId) {
     return;
   }
 
+  sendButton.disabled = true;
   socket.emit('send-message', {
     ticketId: currentTicket.id,
     senderType: 'CUSTOMER',
-    senderId: customerId,
     text
   });
-
   messageInput.value = '';
 });
 
-socket.on('new-message', (message) => {
-  if (!currentTicket || Number(message.ticketId) !== Number(currentTicket.id)) {
-    return;
-  }
-
-  renderMessage(message);
+socket.on('connect', () => {
+  chatNotice.textContent = currentTicket ? 'Reconectando ao atendimento...' : '';
+  joinCurrentTicket();
 });
 
-socket.on('ticket:status-updated', ({ ticketId, status }) => {
+socket.on('disconnect', () => {
+  joinedTicketId = null;
+  messageInput.disabled = true;
+  sendButton.disabled = true;
+  if (currentTicket) {
+    chatNotice.textContent = 'Conexão interrompida. Tentando reconectar...';
+  }
+});
+
+socket.on('ticket:joined', ({ ticketId }) => {
   if (!currentTicket || Number(ticketId) !== Number(currentTicket.id)) {
     return;
   }
 
-  setStatus(status);
+  joinedTicketId = Number(ticketId);
+  messageInput.disabled = false;
+  sendButton.disabled = false;
+  messageInput.focus();
+  chatNotice.textContent = 'Você está conectado. Pode enviar sua mensagem.';
+});
 
-  if (status === 'CLOSED') {
-    chatMessages.innerHTML = '<div class="text-sm text-slate-500 text-center mt-10">Atendimento encerrado. Obrigado por entrar em contato.</div>';
-    messageInput.disabled = true;
+socket.on('new-message', (message) => {
+  if (currentTicket && Number(message.ticketId) === Number(currentTicket.id)) {
+    addMessage(message);
+    sendButton.disabled = false;
   }
 });
 
+socket.on('ticket:status-updated', ({ ticketId, status, departmentName, transferred }) => {
+  if (!currentTicket || Number(ticketId) !== Number(currentTicket.id)) {
+    return;
+  }
+
+  setStatus(status, departmentName, transferred);
+});
+
 socket.on('ticket:error', ({ message }) => {
-  alert(message);
+  chatNotice.textContent = message;
 });
 
 socket.on('message:error', ({ message }) => {
-  alert(message);
+  chatNotice.textContent = message;
+  sendButton.disabled = false;
 });
 
-loadDepartments();
+loadDepartments().catch((error) => {
+  departmentSelect.replaceChildren(new Option('Erro ao carregar setores', ''));
+  formError.textContent = error.message;
+});
