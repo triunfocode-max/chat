@@ -5,6 +5,8 @@ if (storage === 'memory') {
   module.exports = require('./memory-store');
 } else if (storage === 'firebird') {
   module.exports = require('./firebird-store');
+} else if (storage === 'supabase') {
+  module.exports = require('./supabase-store');
 } else {
-  throw new Error(`Armazenamento inválido: ${storage}. Use "memory" ou "firebird".`);
+  throw new Error(`Armazenamento inválido: ${storage}. Use "memory", "firebird" ou "supabase".`);
 }

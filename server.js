@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
-const { randomBytes } = require('crypto');
+const { createHash, randomBytes } = require('crypto');
 const bcrypt = require('bcryptjs');
 const { Server } = require('socket.io');
 const store = require('./config/store');
@@ -18,6 +18,25 @@ const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 const sessions = new Map();
 const ticketAccessTokens = new Map();
 const onlineAgents = new Map();
+
+async function getTicketAccessForToken(ticketId, accessToken) {
+  const token = String(accessToken || '');
+  const inMemoryAccess = ticketAccessTokens.get(token);
+
+  if (
+    inMemoryAccess
+    && inMemoryAccess.ticketId === ticketId
+  ) {
+    return inMemoryAccess;
+  }
+
+  if (!token || typeof store.findTicketByAccessTokenHash !== 'function') {
+    return null;
+  }
+
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  return store.findTicketByAccessTokenHash(ticketId, tokenHash);
+}
 
 function getSession(cookieHeader = '') {
   const cookie = cookieHeader.split(';').map((part) => part.trim())
@@ -111,13 +130,15 @@ app.post('/api/customers/register', async (req, res) => {
       return res.status(400).json({ message: 'Nome, cargo, telefone e departamento são obrigatórios.' });
     }
 
+    const accessToken = randomBytes(32).toString('hex');
+    const accessTokenHash = createHash('sha256').update(accessToken).digest('hex');
     const registration = await store.registerCustomer({
       fullName,
       roleJob,
       phone,
-      departmentId
+      departmentId,
+      accessTokenHash
     });
-    const accessToken = randomBytes(32).toString('hex');
     ticketAccessTokens.set(accessToken, {
       ticketId: Number(registration.ticket.id),
       customerId: Number(registration.customer.id)
@@ -286,7 +307,7 @@ app.post('/api/tickets/:id/close', requireAgent, async (req, res) => {
 app.post('/api/tickets/:id/close-collaborator', async (req, res) => {
   try {
     const ticketId = Number(req.params.id);
-    const access = ticketAccessTokens.get(String(req.body.accessToken || ''));
+    const access = await getTicketAccessForToken(ticketId, req.body.accessToken);
     const ticket = await store.getTicketAccess(ticketId);
 
     if (!ticket || !access || access.ticketId !== ticketId || access.customerId !== Number(ticket.customerId)) {
@@ -309,7 +330,7 @@ app.post('/api/tickets/:id/agents', async (req, res) => {
   try {
     const ticketId = Number(req.params.id);
     const departmentId = Number(req.body.departmentId);
-    const access = ticketAccessTokens.get(String(req.body.accessToken || ''));
+    const access = await getTicketAccessForToken(ticketId, req.body.accessToken);
     const ticket = await store.getTicketAccess(ticketId);
 
     if (!ticket || !access || access.ticketId !== ticketId || access.customerId !== Number(ticket.customerId)) {
@@ -343,7 +364,7 @@ app.post('/api/tickets/:id/transfer-collaborator', async (req, res) => {
     const ticketId = Number(req.params.id);
     const departmentId = Number(req.body.departmentId);
     const agentId = Number(req.body.agentId);
-    const access = ticketAccessTokens.get(String(req.body.accessToken || ''));
+    const access = await getTicketAccessForToken(ticketId, req.body.accessToken);
     const ticket = await store.getTicketAccess(ticketId);
 
     if (!ticket || !access || access.ticketId !== ticketId || access.customerId !== Number(ticket.customerId)) {
@@ -496,7 +517,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const access = ticketAccessTokens.get(String(accessToken || ''));
+      const access = await getTicketAccessForToken(parsedTicketId, accessToken);
       const isCustomer = access
         && access.ticketId === parsedTicketId
         && access.customerId === Number(ticket.customerId);
@@ -603,6 +624,20 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-server.listen(PORT, () => {
-  console.log(`Servidor rodando em http://localhost:${PORT}`);
+async function startServer() {
+  if (typeof store.initialize === 'function') {
+    await store.initialize();
+  }
+
+  server.listen(PORT, () => {
+    console.log(`Servidor rodando em http://localhost:${PORT}`);
+  });
+}
+
+startServer().catch(async (error) => {
+  console.error('Falha ao iniciar o servidor:', error);
+  if (typeof store.close === 'function') {
+    await store.close();
+  }
+  process.exitCode = 1;
 });

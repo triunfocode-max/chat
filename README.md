@@ -2,8 +2,10 @@
 
 ## Estrutura base do projeto
 
-- `sql/firebird_schema.sql` — script de criação do banco Firebird com as tabelas e índices do sistema.
+- `sql/firebird_schema.sql` — script de criação do banco Firebird.
+- `sql/supabase_schema.sql` — script de criação do schema PostgreSQL no Supabase.
 - `config/db.js` — configuração da conexão com Firebird via `node-firebird`.
+- `config/supabase-store.js` — persistência PostgreSQL usada pelo Supabase.
 - `config/memory-store.js` — armazenamento temporário em memória, usado por padrão.
 - `server.js` — API Express + Socket.io.
 - `public/index.html` — front-end do cliente.
@@ -26,6 +28,27 @@ npm start
 ```
 
 Por padrão, `STORAGE=memory`: não é necessário instalar ou conectar a um banco. Os setores iniciais e um usuário de demonstração ficam disponíveis automaticamente. Os dados criados durante o uso são mantidos apenas na memória do servidor e são apagados quando ele é reiniciado.
+
+## Usar Supabase (opcional)
+
+1. Crie um projeto no Supabase e abra o **SQL Editor**.
+2. Execute o conteúdo de `sql/supabase_schema.sql`.
+3. No painel do Supabase, abra **Connect** e copie a string PostgreSQL de **Session pooler** ou **Direct connection**. Para servidores em redes somente IPv4, use o Session pooler. Substitua `[YOUR-PASSWORD]` pela senha do banco e configure as variáveis no ambiente do servidor:
+
+```env
+STORAGE=supabase
+SUPABASE_DB_URL=postgresql://postgres.[PROJECT-REF]:[PASSWORD]@[POOLER-HOST]:5432/postgres
+SUPABASE_CA_CERT=
+ADMIN_EMAIL=admin@empresa.com
+ADMIN_PASSWORD=uma-senha-forte-com-pelo-menos-12-caracteres
+AGENTS_JSON=[{"name":"Atendente Financeiro","email":"financeiro@empresa.com","password":"outra-senha-forte-com-pelo-menos-12-caracteres","departmentId":2}]
+```
+
+O servidor cria/atualiza as contas configuradas no primeiro início. Em produção, use senhas próprias com pelo menos 12 caracteres; não use os usuários de demonstração. O administrador recebe chamados de todos os setores. Os IDs iniciais são Atendimento `1`, Financeiro `2`, Suporte Técnico `3` e Vendas `4`.
+
+Mantenha `SUPABASE_DB_URL`, `ADMIN_PASSWORD` e as senhas em `AGENTS_JSON` somente nas variáveis privadas do ambiente de execução. Não compartilhe nem publique o `.env`, a senha do banco ou uma chave `service_role`; esta integração usa a conexão PostgreSQL diretamente no servidor.
+
+As conexões usam TLS com validação do certificado. Se o provedor do banco exigir um certificado raiz próprio, informe o caminho do arquivo em `SUPABASE_CA_CERT`. Os chamados, mensagens, clientes e agentes ficam no PostgreSQL. Os tokens de acesso dos colaboradores são armazenados como hashes; o token em texto puro não é gravado no banco. A configuração não importa automaticamente dados de uma instalação anterior do Firebird ou da memória.
 
 ## Usar Firebird (opcional)
 
@@ -81,15 +104,8 @@ O sistema estará disponível em:
 
 ## Publicar no Render
 
-Crie um serviço **Web Service** ligado ao repositório do projeto, usando runtime Node, comando de build `npm ci` e comando de início `npm start`. Configure as variáveis `NODE_ENV=production`, `STORAGE=memory`, `ADMIN_EMAIL` e `ADMIN_PASSWORD` próprios. `ADMIN_PASSWORD` precisa ter pelo menos 12 caracteres. Defina também `AGENTS_JSON` com uma lista de atendentes e os respectivos setores; não use as contas de demonstração.
+Crie um serviço **Web Service** ligado ao repositório do projeto, usando runtime Node, comando de build `npm ci` e comando de início `npm start`. Para manter chamados e mensagens após reinícios, configure `NODE_ENV=production`, `STORAGE=supabase`, `SUPABASE_DB_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` e `AGENTS_JSON` nas variáveis privadas do Render. `ADMIN_PASSWORD` e as senhas dos atendentes precisam ter pelo menos 12 caracteres. Se estiver usando o Supabase, crie o schema antes do primeiro deploy. Não use as contas de demonstração em produção.
 
 Não envie o arquivo local `.env` nem a pasta `node_modules` ao repositório. Após o deploy, compartilhe o endereço do serviço: a tela do colaborador fica na raiz (`/`) e o painel do atendente em `/admin.html`.
 
-O serviço precisa permanecer com uma única instância para que a memória e as conexões em tempo real sejam compartilhadas. O plano gratuito do Render pode suspender o serviço quando estiver ocioso e reiniciá-lo; qualquer reinício ou novo deploy apaga os atendimentos armazenados em memória. Use um banco persistente antes de depender do sistema para guardar atendimentos reais.
-
-## Próximo passo recomendado
-
-- Implementar autenticação por sessão JWT para o painel administrativo.
-- Ajustar a fila em tempo real com eventos mais específicos por setor.
-- Melhorar a UI do chat com histórico de mensagens e timestamps.
-- Adicionar transferências entre departamentos/atendentes.
+O serviço precisa permanecer com uma única instância para que as conexões Socket.IO em tempo real sejam compartilhadas. O Supabase persiste os dados entre reinícios e deploys, mas a presença online e as sessões dos atendentes permanecem em memória no servidor.

@@ -1,0 +1,379 @@
+const bcrypt = require('bcryptjs');
+const fs = require('fs');
+const path = require('path');
+const { Pool } = require('pg');
+
+const databaseUrl = process.env.SUPABASE_DB_URL;
+
+if (!databaseUrl) {
+  throw new Error('Defina SUPABASE_DB_URL com a string de conexão PostgreSQL do Supabase.');
+}
+
+const connectionUrl = new URL(databaseUrl);
+if (connectionUrl.protocol !== 'postgres:' && connectionUrl.protocol !== 'postgresql:') {
+  throw new Error('SUPABASE_DB_URL precisa usar o protocolo PostgreSQL.');
+}
+['sslmode', 'sslrootcert', 'sslcert', 'sslkey'].forEach((parameter) => {
+  connectionUrl.searchParams.delete(parameter);
+});
+
+if (process.env.NODE_ENV === 'production' && (
+  !process.env.ADMIN_EMAIL
+  || !process.env.ADMIN_PASSWORD
+  || process.env.ADMIN_PASSWORD.length < 12
+)) {
+  throw new Error('Em produção, defina ADMIN_EMAIL e ADMIN_PASSWORD com pelo menos 12 caracteres.');
+}
+
+const configuredAgents = process.env.AGENTS_JSON ? JSON.parse(process.env.AGENTS_JSON) : [];
+
+if (!Array.isArray(configuredAgents)) {
+  throw new Error('AGENTS_JSON deve conter uma lista JSON de atendentes.');
+}
+
+const departments = [
+  { id: 1, name: 'Atendimento' },
+  { id: 2, name: 'Financeiro' },
+  { id: 3, name: 'Suporte Técnico' },
+  { id: 4, name: 'Vendas' }
+];
+const demoAgents = process.env.NODE_ENV === 'production' || configuredAgents.length > 0
+  ? []
+  : [
+    { name: 'Atendente Financeiro', email: 'financeiro@empresa.com', password: 'financeiro123', departmentId: 2 },
+    { name: 'Atendente Suporte', email: 'suporte@empresa.com', password: 'suporte12345', departmentId: 3 },
+    { name: 'Atendente Vendas', email: 'vendas@empresa.com', password: 'vendas12345', departmentId: 4 }
+  ];
+const agentsToSeed = [
+  {
+    name: 'Atendente Admin',
+    email: process.env.ADMIN_EMAIL || 'admin@empresa.com',
+    password: process.env.ADMIN_PASSWORD || 'admin123',
+    departmentId: Number(process.env.ADMIN_DEPARTMENT_ID || 1),
+    isAdmin: true
+  },
+  ...[...demoAgents, ...configuredAgents].map((agent) => ({
+    name: String(agent.name || '').trim(),
+    email: String(agent.email || '').trim(),
+    password: String(agent.password || ''),
+    departmentId: Number(agent.departmentId),
+    isAdmin: false
+  }))
+];
+
+const agentEmails = new Set();
+agentsToSeed.forEach((agent, index) => {
+  const email = agent.email.toLowerCase();
+  const minimumPasswordLength = process.env.NODE_ENV === 'production' ? 12 : 1;
+
+  if (
+    !agent.name
+    || !email
+    || agent.password.length < minimumPasswordLength
+    || !departments.some((department) => department.id === agent.departmentId)
+  ) {
+    throw new Error(`Atendente inválido na posição ${index + 1} da configuração.`);
+  }
+
+  if (agentEmails.has(email)) {
+    throw new Error('Os e-mails dos atendentes precisam ser únicos.');
+  }
+  agentEmails.add(email);
+});
+
+const pool = new Pool({
+  connectionString: connectionUrl.toString(),
+  ssl: {
+    rejectUnauthorized: true,
+    ...(process.env.SUPABASE_CA_CERT
+      ? { ca: fs.readFileSync(path.resolve(process.env.SUPABASE_CA_CERT), 'utf8') }
+      : {})
+  },
+  max: 5,
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
+  application_name: 'multi-atendimento-web'
+});
+
+function normalizeRows(rows = []) {
+  return rows.map((row) => Object.entries(row).reduce((normalized, [key, value]) => {
+    const upperKey = key.toUpperCase();
+    normalized[upperKey] = value !== null && (upperKey === 'ID' || upperKey.endsWith('_ID'))
+      ? Number(value)
+      : value;
+    return normalized;
+  }, {}));
+}
+
+async function initialize() {
+  for (const department of departments) {
+    await pool.query(
+      'INSERT INTO departments (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING',
+      [department.id, department.name]
+    );
+  }
+
+  await pool.query(`
+    SELECT setval(
+      pg_get_serial_sequence('departments', 'id'),
+      GREATEST((SELECT COALESCE(MAX(id), 1) FROM departments), 1)
+    )
+  `);
+
+  for (const agent of agentsToSeed) {
+    const passwordHash = await bcrypt.hash(agent.password, 10);
+    await pool.query(
+      `INSERT INTO agents (name, email, password_hash, department_id, is_admin)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (email) DO UPDATE
+       SET name = EXCLUDED.name,
+           password_hash = EXCLUDED.password_hash,
+           department_id = EXCLUDED.department_id,
+           is_admin = EXCLUDED.is_admin`,
+      [agent.name, agent.email.toLowerCase(), passwordHash, agent.departmentId, agent.isAdmin]
+    );
+  }
+}
+
+async function createDepartment(name) {
+  const inserted = await pool.query(
+    `INSERT INTO departments (name) VALUES ($1)
+     ON CONFLICT (LOWER(name)) DO NOTHING
+     RETURNING id AS "ID", name AS "NAME"`,
+    [name]
+  );
+  const department = inserted.rows[0] || (await pool.query(
+    'SELECT id AS "ID", name AS "NAME" FROM departments WHERE LOWER(name) = LOWER($1)',
+    [name]
+  )).rows[0];
+
+  return {
+    department: { id: Number(department.ID), name: department.NAME },
+    created: inserted.rowCount > 0
+  };
+}
+
+async function registerCustomer({ fullName, roleJob, phone, departmentId, accessTokenHash }) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    let customerResult = await client.query(
+      `SELECT id AS "ID" FROM customers
+       WHERE phone = $1
+       ORDER BY id
+       LIMIT 1`,
+      [phone]
+    );
+    let customerId = customerResult.rows[0]?.ID;
+
+    if (!customerId) {
+      customerResult = await client.query(
+        `INSERT INTO customers (full_name, role_job, phone)
+         VALUES ($1, $2, $3)
+         RETURNING id AS "ID"`,
+        [fullName, roleJob, phone]
+      );
+      customerId = customerResult.rows[0].ID;
+    }
+
+    const ticketResult = await client.query(
+      `INSERT INTO tickets (customer_id, department_id, status, access_token_hash)
+       VALUES ($1, $2, 'WAITING', $3)
+       RETURNING id AS "ID"`,
+      [customerId, departmentId, accessTokenHash || null]
+    );
+    await client.query('COMMIT');
+
+    return {
+      customer: { id: Number(customerId), fullName, phone, roleJob },
+      ticket: { id: Number(ticketResult.rows[0].ID), status: 'WAITING', departmentId }
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function getDashboard(agentId, departmentId, isAdmin = false) {
+  const ticketQuery = (where, values, orderBy, limit = '') => pool.query(`
+    SELECT
+      T.ID AS "ID",
+      T.STATUS AS "STATUS",
+      T.CREATED_AT AS "CREATED_AT",
+      T.UPDATED_AT AS "UPDATED_AT",
+      T.DEPARTMENT_ID AS "DEPARTMENT_ID",
+      C.FULL_NAME AS "FULL_NAME",
+      C.ROLE_JOB AS "ROLE_JOB",
+      C.PHONE AS "PHONE",
+      D.NAME AS "DEPARTMENT_NAME"
+    FROM TICKETS T
+    INNER JOIN CUSTOMERS C ON C.ID = T.CUSTOMER_ID
+    INNER JOIN DEPARTMENTS D ON D.ID = T.DEPARTMENT_ID
+    WHERE ${where}
+    ORDER BY ${orderBy}
+    ${limit}
+  `, values).then((result) => normalizeRows(result.rows));
+
+  const [waiting, myTickets, closed] = await Promise.all([
+    isAdmin
+      ? ticketQuery("T.STATUS = 'WAITING'", [], 'T.CREATED_AT ASC')
+      : ticketQuery("T.STATUS = 'WAITING' AND T.DEPARTMENT_ID = $1", [departmentId], 'T.CREATED_AT ASC'),
+    ticketQuery("T.STATUS = 'IN_PROGRESS' AND T.ASSIGNED_AGENT_ID = $1", [agentId], 'T.UPDATED_AT DESC'),
+    ticketQuery("T.STATUS = 'CLOSED' AND T.ASSIGNED_AGENT_ID = $1", [agentId], 'T.UPDATED_AT DESC', 'LIMIT 20')
+  ]);
+
+  return { waiting, myTickets, closed };
+}
+
+async function getTicketAccess(ticketId) {
+  const result = await pool.query(
+    `SELECT T.CUSTOMER_ID AS "CUSTOMER_ID",
+            T.ASSIGNED_AGENT_ID AS "ASSIGNED_AGENT_ID",
+            T.STATUS AS "STATUS",
+            T.DEPARTMENT_ID AS "DEPARTMENT_ID",
+            D.NAME AS "DEPARTMENT_NAME",
+            C.FULL_NAME AS "FULL_NAME",
+            C.PHONE AS "PHONE",
+            C.ROLE_JOB AS "ROLE_JOB"
+     FROM TICKETS T
+     INNER JOIN DEPARTMENTS D ON D.ID = T.DEPARTMENT_ID
+     INNER JOIN CUSTOMERS C ON C.ID = T.CUSTOMER_ID
+     WHERE T.ID = $1`,
+    [ticketId]
+  );
+  const ticket = normalizeRows(result.rows)[0];
+
+  if (!ticket) {
+    return null;
+  }
+
+  return {
+    customerId: ticket.CUSTOMER_ID,
+    assignedAgentId: ticket.ASSIGNED_AGENT_ID,
+    status: ticket.STATUS,
+    departmentId: ticket.DEPARTMENT_ID,
+    departmentName: ticket.DEPARTMENT_NAME,
+    fullName: ticket.FULL_NAME,
+    phone: ticket.PHONE,
+    roleJob: ticket.ROLE_JOB
+  };
+}
+
+async function transferTicket(ticketId, departmentId) {
+  await pool.query(
+    `UPDATE tickets
+     SET department_id = $1, assigned_agent_id = NULL, status = 'WAITING', updated_at = CURRENT_TIMESTAMP
+     WHERE id = $2`,
+    [departmentId, ticketId]
+  );
+  return getTicketAccess(ticketId);
+}
+
+async function transferTicketToAgent(ticketId, departmentId, agentId) {
+  const result = await pool.query(
+    `UPDATE tickets
+     SET department_id = $1, assigned_agent_id = $2, status = 'IN_PROGRESS', updated_at = CURRENT_TIMESTAMP
+     WHERE id = $3
+       AND EXISTS (SELECT 1 FROM agents WHERE id = $2 AND department_id = $1)`,
+    [departmentId, agentId, ticketId]
+  );
+
+  return result.rowCount ? getTicketAccess(ticketId) : null;
+}
+
+async function getMessages(ticketId) {
+  const result = await pool.query(
+    `SELECT id AS "ID", ticket_id AS "TICKET_ID", sender_type AS "SENDER_TYPE",
+            sender_id AS "SENDER_ID", message_text AS "MESSAGE_TEXT", created_at AS "CREATED_AT"
+     FROM messages
+     WHERE ticket_id = $1
+     ORDER BY created_at ASC, id ASC`,
+    [ticketId]
+  );
+
+  return normalizeRows(result.rows).map((row) => ({
+    id: row.ID,
+    ticketId: row.TICKET_ID,
+    senderType: row.SENDER_TYPE,
+    senderId: row.SENDER_ID,
+    messageText: row.MESSAGE_TEXT,
+    createdAt: row.CREATED_AT
+  }));
+}
+
+async function createMessage({ ticketId, senderType, senderId, text }) {
+  const result = await pool.query(
+    `INSERT INTO messages (ticket_id, sender_type, sender_id, message_text)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id AS "ID", created_at AS "CREATED_AT"`,
+    [ticketId, senderType, senderId || null, text]
+  );
+
+  return {
+    id: Number(result.rows[0].ID),
+    ticketId,
+    senderType,
+    senderId: senderId || null,
+    messageText: text,
+    createdAt: result.rows[0].CREATED_AT
+  };
+}
+
+module.exports = {
+  initialize,
+  close: () => pool.end(),
+  listDepartments: async () => {
+    const result = await pool.query('SELECT id AS "ID", name AS "NAME" FROM departments ORDER BY name');
+    return normalizeRows(result.rows);
+  },
+  createDepartment,
+  registerCustomer,
+  findAgentByEmail: async (email) => {
+    const result = await pool.query(
+      `SELECT id AS "ID", name AS "NAME", email AS "EMAIL",
+              password_hash AS "PASSWORD_HASH", department_id AS "DEPARTMENT_ID",
+              is_admin AS "IS_ADMIN"
+       FROM agents
+       WHERE LOWER(email) = LOWER($1)`,
+      [email]
+    );
+    return normalizeRows(result.rows)[0] || null;
+  },
+  getDashboard,
+  getTicketAccess,
+  assignTicket: (ticketId, agentId) => pool.query(
+    `UPDATE tickets
+     SET assigned_agent_id = $1, status = 'IN_PROGRESS', updated_at = CURRENT_TIMESTAMP
+     WHERE id = $2`,
+    [agentId, ticketId]
+  ),
+  closeTicket: (ticketId, agentId) => pool.query(
+    `UPDATE tickets
+     SET status = 'CLOSED', assigned_agent_id = $1, updated_at = CURRENT_TIMESTAMP
+     WHERE id = $2`,
+    [agentId || null, ticketId]
+  ),
+  transferTicket,
+  transferTicketToAgent,
+  getMessages,
+  listAgents: async () => {
+    const result = await pool.query(
+      'SELECT id AS "ID", name AS "NAME", department_id AS "DEPARTMENT_ID" FROM agents ORDER BY name'
+    );
+    return normalizeRows(result.rows);
+  },
+  createMessage,
+  findTicketByAccessTokenHash: async (ticketId, accessTokenHash) => {
+    const result = await pool.query(
+      `SELECT id AS "TICKET_ID", customer_id AS "CUSTOMER_ID"
+       FROM tickets
+       WHERE id = $1 AND access_token_hash = $2`,
+      [ticketId, accessTokenHash]
+    );
+    const access = normalizeRows(result.rows)[0];
+    return access ? { ticketId: access.TICKET_ID, customerId: access.CUSTOMER_ID } : null;
+  }
+};
