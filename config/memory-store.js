@@ -184,6 +184,21 @@ function transferTicket(ticketId, departmentId) {
   return getTicketAccess(ticketId);
 }
 
+function transferTicketToAgent(ticketId, departmentId, agentId) {
+  const ticket = tickets.find((item) => item.ID === ticketId);
+  const agent = agents.find((item) => item.ID === agentId);
+
+  if (!ticket || !agent || agent.DEPARTMENT_ID !== departmentId) {
+    return null;
+  }
+
+  ticket.DEPARTMENT_ID = departmentId;
+  ticket.ASSIGNED_AGENT_ID = agentId;
+  ticket.STATUS = 'IN_PROGRESS';
+  ticket.UPDATED_AT = new Date().toISOString();
+  return getTicketAccess(ticketId);
+}
+
 function createMessage({ ticketId, senderType, senderId, text }) {
   const message = {
     id: nextMessageId++,
@@ -201,6 +216,10 @@ function getMessages(ticketId) {
   return messages.filter((message) => message.ticketId === ticketId);
 }
 
+function listAgents() {
+  return agents.map(({ ID, NAME, DEPARTMENT_ID }) => ({ ID, NAME, DEPARTMENT_ID }));
+}
+
 function getTicketAccess(ticketId) {
   const ticket = tickets.find((item) => item.ID === ticketId);
 
@@ -213,7 +232,10 @@ function getTicketAccess(ticketId) {
     assignedAgentId: ticket.ASSIGNED_AGENT_ID,
     status: ticket.STATUS,
     departmentId: ticket.DEPARTMENT_ID,
-    departmentName: departments.find((department) => department.ID === ticket.DEPARTMENT_ID)?.NAME
+    departmentName: departments.find((department) => department.ID === ticket.DEPARTMENT_ID)?.NAME,
+    fullName: customers.find((customer) => customer.ID === ticket.CUSTOMER_ID)?.FULL_NAME,
+    phone: customers.find((customer) => customer.ID === ticket.CUSTOMER_ID)?.PHONE,
+    roleJob: customers.find((customer) => customer.ID === ticket.CUSTOMER_ID)?.ROLE_JOB
   };
 }
 
@@ -227,6 +249,8 @@ module.exports = {
   assignTicket,
   closeTicket,
   transferTicket,
+  transferTicketToAgent,
   getMessages,
+  listAgents,
   createMessage
 };

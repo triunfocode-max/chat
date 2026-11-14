@@ -14,6 +14,12 @@ const sendButton = document.getElementById('sendButton');
 const chatNotice = document.getElementById('chatNotice');
 const formError = document.getElementById('formError');
 const startChatButton = document.getElementById('startChatButton');
+const collaboratorActions = document.getElementById('collaboratorActions');
+const collaboratorTransferDialog = document.getElementById('collaboratorTransferDialog');
+const collaboratorTransferDepartment = document.getElementById('collaboratorTransferDepartment');
+const collaboratorTransferAgents = document.getElementById('collaboratorTransferAgents');
+const collaboratorTransferError = document.getElementById('collaboratorTransferError');
+const confirmCollaboratorTransfer = document.getElementById('confirmCollaboratorTransfer');
 
 let currentTicket = null;
 let joinedTicketId = null;
@@ -68,6 +74,7 @@ function setStatus(status, departmentName, transferred = false) {
     chatNotice.textContent = 'Este atendimento foi encerrado.';
     messageInput.disabled = true;
     sendButton.disabled = true;
+    collaboratorActions.classList.add('hidden');
   }
 }
 
@@ -140,12 +147,147 @@ function joinCurrentTicket() {
   if (!currentTicket || !socket.connected) {
     return;
   }
-
   socket.emit('join-ticket', {
     ticketId: currentTicket.id,
     accessToken: currentTicket.accessToken
   });
 }
+
+async function loadTransferAgents() {
+  collaboratorTransferAgents.replaceChildren();
+  const departmentId = Number(collaboratorTransferDepartment.value);
+  if (!departmentId) return;
+
+  const response = await fetch(`/api/tickets/${currentTicket.id}/agents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ departmentId, accessToken: currentTicket.accessToken })
+  });
+  const agents = await response.json();
+  if (!response.ok) {
+    throw new Error(agents.message || 'Não foi possível carregar os atendentes.');
+  }
+
+  if (agents.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'rounded-xl bg-slate-50 p-3 text-sm text-slate-500';
+    empty.textContent = 'Não há atendentes cadastrados neste setor.';
+    collaboratorTransferAgents.appendChild(empty);
+    return;
+  }
+
+  agents.forEach((agent) => {
+    const label = document.createElement('label');
+    label.className = 'flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 px-3 py-3 hover:border-sky-300 hover:bg-sky-50';
+    const person = document.createElement('span');
+    person.className = 'flex items-center gap-3';
+    const dot = document.createElement('span');
+    dot.className = `h-2.5 w-2.5 rounded-full ${agent.online ? 'bg-emerald-500' : 'bg-red-500'}`;
+    const name = document.createElement('span');
+    name.className = 'text-sm font-medium text-slate-700';
+    name.textContent = agent.name;
+    const presence = document.createElement('span');
+    presence.className = `text-xs ${agent.online ? 'text-emerald-700' : 'text-red-600'}`;
+    presence.textContent = agent.online ? 'Online' : 'Offline';
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'transferAgent';
+    radio.value = String(agent.id);
+    radio.className = 'accent-sky-700';
+    person.append(dot, name);
+    label.append(person, presence, radio);
+    collaboratorTransferAgents.appendChild(label);
+  });
+}
+
+function openTransferDialog() {
+  if (!currentTicket || currentTicket.status === 'CLOSED') return;
+  collaboratorTransferError.classList.add('hidden');
+  collaboratorTransferDepartment.replaceChildren(new Option('Selecione o setor', ''));
+  Array.from(departmentSelect.options).forEach((option) => {
+    if (option.value && Number(option.value) !== Number(currentTicket.departmentId)) {
+      collaboratorTransferDepartment.add(new Option(option.textContent, option.value));
+    }
+  });
+  collaboratorTransferAgents.replaceChildren();
+  collaboratorTransferDialog.classList.remove('hidden');
+  collaboratorTransferDialog.classList.add('flex');
+}
+
+function closeTransferDialog() {
+  collaboratorTransferDialog.classList.add('hidden');
+  collaboratorTransferDialog.classList.remove('flex');
+}
+
+document.getElementById('collaboratorTransferButton').addEventListener('click', openTransferDialog);
+document.getElementById('closeCollaboratorTransfer').addEventListener('click', closeTransferDialog);
+document.getElementById('cancelCollaboratorTransfer').addEventListener('click', closeTransferDialog);
+collaboratorTransferDepartment.addEventListener('change', async () => {
+  collaboratorTransferError.classList.add('hidden');
+  try {
+    await loadTransferAgents();
+  } catch (error) {
+    collaboratorTransferError.textContent = error.message;
+    collaboratorTransferError.classList.remove('hidden');
+  }
+});
+
+confirmCollaboratorTransfer.addEventListener('click', async () => {
+  const selectedAgent = collaboratorTransferAgents.querySelector('input[name="transferAgent"]:checked');
+  if (!selectedAgent) {
+    collaboratorTransferError.textContent = 'Selecione um atendente para receber a conversa.';
+    collaboratorTransferError.classList.remove('hidden');
+    return;
+  }
+
+  confirmCollaboratorTransfer.disabled = true;
+  try {
+    const response = await fetch(`/api/tickets/${currentTicket.id}/transfer-collaborator`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accessToken: currentTicket.accessToken,
+        departmentId: Number(collaboratorTransferDepartment.value),
+        agentId: Number(selectedAgent.value)
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Não foi possível transferir o atendimento.');
+
+    currentTicket.departmentId = data.departmentId;
+    currentTicket.status = data.status;
+    currentTicket.agentId = data.agentId;
+    closeTransferDialog();
+    setStatus(data.status, data.departmentName, true);
+    messageInput.disabled = !joinedTicketId;
+    sendButton.disabled = messageInput.disabled;
+  } catch (error) {
+    collaboratorTransferError.textContent = error.message;
+    collaboratorTransferError.classList.remove('hidden');
+  } finally {
+    confirmCollaboratorTransfer.disabled = false;
+  }
+});
+
+document.getElementById('collaboratorCloseButton').addEventListener('click', async () => {
+  if (!currentTicket || !window.confirm('Deseja encerrar este atendimento?')) return;
+  const closeButton = document.getElementById('collaboratorCloseButton');
+  closeButton.disabled = true;
+  try {
+    const response = await fetch(`/api/tickets/${currentTicket.id}/close-collaborator`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessToken: currentTicket.accessToken })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Não foi possível encerrar o atendimento.');
+    currentTicket.status = data.status;
+    setStatus(data.status);
+  } catch (error) {
+    chatNotice.textContent = error.message;
+    closeButton.disabled = false;
+  }
+});
 
 chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -202,6 +344,19 @@ socket.on('ticket:status-updated', ({ ticketId, status, departmentName, transfer
   }
 
   setStatus(status, departmentName, transferred);
+  if (status !== 'CLOSED') {
+    messageInput.disabled = !joinedTicketId;
+    sendButton.disabled = messageInput.disabled;
+  }
+});
+
+socket.on('agents:presence-updated', () => {
+  if (!collaboratorTransferDialog.classList.contains('hidden') && collaboratorTransferDepartment.value) {
+    loadTransferAgents().catch((error) => {
+      collaboratorTransferError.textContent = error.message;
+      collaboratorTransferError.classList.remove('hidden');
+    });
+  }
 });
 
 socket.on('ticket:error', ({ message }) => {

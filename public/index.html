@@ -90,12 +90,41 @@
         </div>
         <div id="chatMessages" class="message-scroll flex h-[55vh] min-h-72 flex-col gap-3 overflow-y-auto bg-slate-50 p-5 md:p-7"></div>
         <div id="chatNotice" class="border-t border-slate-100 px-5 py-2 text-center text-xs text-slate-500"></div>
+        <div id="collaboratorActions" class="flex justify-end gap-2 border-t border-slate-100 bg-white px-4 py-3">
+          <button id="collaboratorTransferButton" type="button" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Transferir atendimento</button>
+          <button id="collaboratorCloseButton" type="button" class="rounded-lg border border-red-200 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50">Encerrar atendimento</button>
+        </div>
         <form id="chatForm" class="flex gap-2 border-t border-slate-200 bg-white p-4 md:p-5">
           <input id="messageInput" type="text" placeholder="Escreva sua mensagem..." maxlength="1000" disabled class="min-w-0 flex-1 rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-100" />
           <button id="sendButton" type="submit" disabled class="rounded-xl bg-sky-700 px-5 font-semibold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50">Enviar</button>
         </form>
       </section>
     </main>
+
+    <div id="collaboratorTransferDialog" class="fixed inset-0 z-10 hidden items-center justify-center bg-slate-900/40 p-4">
+      <section class="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+        <div class="flex items-start justify-between">
+          <div>
+            <h2 class="text-lg font-bold">Transferir atendimento</h2>
+            <p class="mt-1 text-sm text-slate-500">Escolha um setor e um atendente para continuar a conversa.</p>
+          </div>
+          <button id="closeCollaboratorTransfer" type="button" class="rounded-lg px-2 py-1 text-xl text-slate-400 hover:bg-slate-100">×</button>
+        </div>
+        <label class="mt-5 block">
+          <span class="mb-1.5 block text-sm font-semibold">Setor</span>
+          <select id="collaboratorTransferDepartment" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-3 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100"></select>
+        </label>
+        <div class="mt-4">
+          <p class="mb-2 text-sm font-semibold">Atendente</p>
+          <div id="collaboratorTransferAgents" class="max-h-56 space-y-2 overflow-y-auto"></div>
+        </div>
+        <p id="collaboratorTransferError" class="mt-3 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700"></p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button id="cancelCollaboratorTransfer" type="button" class="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">Cancelar</button>
+          <button id="confirmCollaboratorTransfer" type="button" class="rounded-xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800">Transferir</button>
+        </div>
+      </section>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="/js/app.js"></script>

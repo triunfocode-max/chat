@@ -99,9 +99,11 @@ async function getDashboard(agentId, departmentId, isAdmin = false) {
 async function getTicketAccess(ticketId) {
   const rows = normalizeRows(
     await query(
-      `SELECT T.CUSTOMER_ID, T.ASSIGNED_AGENT_ID, T.STATUS, T.DEPARTMENT_ID, D.NAME AS DEPARTMENT_NAME
+      `SELECT T.CUSTOMER_ID, T.ASSIGNED_AGENT_ID, T.STATUS, T.DEPARTMENT_ID, D.NAME AS DEPARTMENT_NAME,
+              C.FULL_NAME, C.PHONE, C.ROLE_JOB
        FROM TICKETS T
        INNER JOIN DEPARTMENTS D ON D.ID = T.DEPARTMENT_ID
+       INNER JOIN CUSTOMERS C ON C.ID = T.CUSTOMER_ID
        WHERE T.ID = ?`,
       [ticketId]
     )
@@ -117,7 +119,10 @@ async function getTicketAccess(ticketId) {
     assignedAgentId: ticket.ASSIGNED_AGENT_ID,
     status: ticket.STATUS,
     departmentId: ticket.DEPARTMENT_ID,
-    departmentName: ticket.DEPARTMENT_NAME
+    departmentName: ticket.DEPARTMENT_NAME,
+    fullName: ticket.FULL_NAME,
+    phone: ticket.PHONE,
+    roleJob: ticket.ROLE_JOB
   };
 }
 
@@ -127,6 +132,16 @@ async function transferTicket(ticketId, departmentId) {
      SET DEPARTMENT_ID = ?, ASSIGNED_AGENT_ID = NULL, STATUS = 'WAITING', UPDATED_AT = CURRENT_TIMESTAMP
      WHERE ID = ?`,
     [departmentId, ticketId]
+  );
+  return getTicketAccess(ticketId);
+}
+
+async function transferTicketToAgent(ticketId, departmentId, agentId) {
+  await query(
+    `UPDATE TICKETS
+     SET DEPARTMENT_ID = ?, ASSIGNED_AGENT_ID = ?, STATUS = 'IN_PROGRESS', UPDATED_AT = CURRENT_TIMESTAMP
+     WHERE ID = ?`,
+    [departmentId, agentId, ticketId]
   );
   return getTicketAccess(ticketId);
 }
@@ -175,7 +190,11 @@ module.exports = {
     [agentId || null, ticketId]
   ),
   transferTicket,
+  transferTicketToAgent,
   getMessages,
+  listAgents: async () => normalizeRows(
+    await query('SELECT ID, NAME, DEPARTMENT_ID FROM AGENTS ORDER BY NAME')
+  ),
   createMessage: async ({ ticketId, senderType, senderId, text }) => {
     const result = normalizeRows(
       await query(

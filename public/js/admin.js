@@ -23,12 +23,25 @@ const transferDialog = document.getElementById('transferDialog');
 const transferDepartment = document.getElementById('transferDepartment');
 const transferError = document.getElementById('transferError');
 const confirmTransfer = document.getElementById('confirmTransfer');
+const queueBadge = document.getElementById('queueBadge');
+const notificationBadge = document.getElementById('notificationBadge');
+const notificationButton = document.getElementById('notificationButton');
+const toastContainer = document.getElementById('toastContainer');
+const quickReplyDialog = document.getElementById('quickReplyDialog');
+const quickReplyTitle = document.getElementById('quickReplyTitle');
+const quickReplySubtitle = document.getElementById('quickReplySubtitle');
+const quickReplyMessage = document.getElementById('quickReplyMessage');
+const quickReplyError = document.getElementById('quickReplyError');
+const sendQuickReply = document.getElementById('sendQuickReply');
 
 let currentAgent = null;
 let dashboard = { waiting: [], myTickets: [], closed: [] };
 let departments = [];
 let selectedTicket = null;
 let activeFilter = 'queue';
+let quickReplyTicket = null;
+let pendingQuickReplyText = null;
+const notifiedTicketIds = new Set();
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({
@@ -77,6 +90,10 @@ function renderTicketList() {
   document.getElementById('totalCount').textContent = String(
     dashboard.waiting.length + dashboard.myTickets.length
   );
+  queueBadge.textContent = String(dashboard.waiting.length);
+  queueBadge.classList.toggle('hidden', dashboard.waiting.length === 0);
+  notificationBadge.textContent = String(dashboard.waiting.length);
+  notificationBadge.classList.toggle('hidden', dashboard.waiting.length === 0);
   ticketList.replaceChildren();
 
   if (tickets.length === 0) {
@@ -113,6 +130,90 @@ function renderTicketList() {
     card.addEventListener('click', () => selectTicket(ticket));
     ticketList.appendChild(card);
   });
+}
+
+function findTicket(ticketId) {
+  return allTickets().find((ticket) => Number(ticket.ID) === Number(ticketId));
+}
+
+function openQuickReply(ticket) {
+  quickReplyTicket = ticket;
+  quickReplyTitle.textContent = ticket.FULL_NAME || 'Novo chamado';
+  quickReplySubtitle.textContent = `Chamado #${ticket.ID} · ${ticket.DEPARTMENT_NAME || 'Fila'}`;
+  quickReplyError.classList.add('hidden');
+  quickReplyMessage.value = '';
+  sendQuickReply.textContent = ticket.STATUS === 'WAITING' ? 'Assumir e enviar' : 'Enviar resposta';
+  quickReplyDialog.classList.remove('hidden');
+  quickReplyDialog.classList.add('flex');
+  quickReplyMessage.focus();
+}
+
+function closeQuickReply() {
+  quickReplyDialog.classList.add('hidden');
+  quickReplyDialog.classList.remove('flex');
+  quickReplyTicket = null;
+}
+
+function showIncomingNotification(incoming, eventType = 'ticket') {
+  const ticketId = Number(incoming.ticketId || incoming.ID);
+  const notificationKey = `${ticketId}:${eventType}`;
+  if (!ticketId || notifiedTicketIds.has(notificationKey)) return;
+  notifiedTicketIds.add(notificationKey);
+
+  const ticket = findTicket(ticketId) || {
+    ID: ticketId,
+    STATUS: incoming.status || 'WAITING',
+    FULL_NAME: incoming.fullName || 'Novo colaborador',
+    PHONE: incoming.phone || '',
+    ROLE_JOB: incoming.roleJob || '',
+    DEPARTMENT_ID: incoming.departmentId,
+    DEPARTMENT_NAME: incoming.departmentName || departments.find(
+      (department) => Number(department.ID) === Number(incoming.departmentId)
+    )?.NAME || 'Seu setor',
+    CREATED_AT: new Date().toISOString(),
+    UPDATED_AT: new Date().toISOString()
+  };
+
+  const toast = document.createElement('article');
+  toast.className = 'cursor-pointer rounded-xl border border-sky-200 bg-white p-4 shadow-xl transition hover:-translate-y-0.5';
+  const title = document.createElement('p');
+  title.className = 'font-semibold text-slate-800';
+  title.textContent = eventType === 'message'
+    ? `${ticket.FULL_NAME} · nova mensagem`
+    : `${ticket.FULL_NAME} · novo chamado`;
+  const detail = document.createElement('p');
+  detail.className = 'mt-1 text-xs text-slate-500';
+  detail.textContent = `${ticket.DEPARTMENT_NAME} · ${ticket.PHONE || 'Chamado na fila'}`;
+  const actions = document.createElement('div');
+  actions.className = 'mt-3 flex justify-end';
+  const replyButton = document.createElement('button');
+  replyButton.type = 'button';
+  replyButton.className = 'rounded-lg bg-sky-700 px-3 py-2 text-xs font-semibold text-white hover:bg-sky-800';
+  replyButton.textContent = 'Resposta rápida';
+  actions.appendChild(replyButton);
+  toast.append(title, detail, actions);
+  toast.addEventListener('click', () => openQuickReply(findTicket(ticketId) || ticket));
+  replyButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openQuickReply(findTicket(ticketId) || ticket);
+  });
+  toastContainer.prepend(toast);
+  window.setTimeout(() => toast.remove(), 12000);
+
+  if ('Notification' in window && Notification.permission === 'granted') {
+    const notification = new Notification(
+      eventType === 'message' ? `Nova mensagem: ${ticket.FULL_NAME}` : `Novo chamado: ${ticket.FULL_NAME}`,
+      {
+        body: `${ticket.DEPARTMENT_NAME} · clique para resposta rápida`,
+        tag: `ticket-${ticketId}-${eventType}`
+      }
+    );
+    notification.onclick = () => {
+      window.focus();
+      openQuickReply(findTicket(ticketId) || ticket);
+      notification.close();
+    };
+  }
 }
 
 function renderMessage(message) {
@@ -274,6 +375,9 @@ loginForm.addEventListener('submit', async (event) => {
     if (!response.ok) throw new Error(data.message || 'Não foi possível entrar.');
 
     currentAgent = data.agent;
+    if ('Notification' in window && Notification.permission === 'default') {
+      await Notification.requestPermission();
+    }
     socket.disconnect();
     socket.connect();
     loginPanel.classList.add('hidden');
@@ -285,6 +389,52 @@ loginForm.addEventListener('submit', async (event) => {
     loginError.classList.remove('hidden');
   } finally {
     loginButton.disabled = false;
+  }
+});
+
+notificationButton.addEventListener('click', () => {
+  activeFilter = 'queue';
+  updateFilterButtons();
+  renderTicketList();
+});
+
+document.getElementById('closeQuickReply').addEventListener('click', closeQuickReply);
+document.getElementById('cancelQuickReply').addEventListener('click', closeQuickReply);
+document.querySelectorAll('.quickReplyOption').forEach((button) => {
+  button.addEventListener('click', () => {
+    quickReplyMessage.value = button.dataset.quickMessage;
+    quickReplyMessage.focus();
+  });
+});
+
+sendQuickReply.addEventListener('click', async () => {
+  if (!quickReplyTicket) return;
+  const text = quickReplyMessage.value.trim();
+  if (!text) {
+    quickReplyError.textContent = 'Digite uma mensagem ou escolha uma resposta rápida.';
+    quickReplyError.classList.remove('hidden');
+    return;
+  }
+
+  sendQuickReply.disabled = true;
+  try {
+    const ticketId = Number(quickReplyTicket.ID);
+    if (quickReplyTicket.STATUS === 'WAITING') {
+      const response = await fetch(`/api/tickets/${ticketId}/assign`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Não foi possível assumir o chamado.');
+    }
+
+    pendingQuickReplyText = { ticketId, text };
+    await loadDashboard();
+    const ticket = findTicket(ticketId) || { ...quickReplyTicket, STATUS: 'IN_PROGRESS' };
+    closeQuickReply();
+    await selectTicket(ticket);
+  } catch (error) {
+    quickReplyError.textContent = error.message;
+    quickReplyError.classList.remove('hidden');
+  } finally {
+    sendQuickReply.disabled = false;
   }
 });
 
@@ -388,6 +538,35 @@ socket.on('connect', () => {
   }
 });
 
+socket.on('ticket:incoming', (ticket) => {
+  showIncomingNotification(ticket);
+  loadDashboard();
+});
+
+socket.on('ticket:message', async (activity) => {
+  if (selectedTicket && Number(selectedTicket.ID) === Number(activity.ticketId)) return;
+  await loadDashboard();
+  const ticket = findTicket(activity.ticketId);
+  showIncomingNotification({
+    ...activity,
+    ticketId: activity.ticketId,
+    fullName: ticket?.FULL_NAME || 'Nova mensagem',
+    departmentName: ticket?.DEPARTMENT_NAME || 'Atendimento',
+    status: ticket?.STATUS
+  }, 'message');
+});
+
+socket.on('ticket:joined', ({ ticketId }) => {
+  if (!pendingQuickReplyText || Number(ticketId) !== pendingQuickReplyText.ticketId) return;
+  const { text } = pendingQuickReplyText;
+  pendingQuickReplyText = null;
+  socket.emit('send-message', {
+    ticketId: Number(ticketId),
+    senderType: 'AGENT',
+    text
+  });
+});
+
 socket.on('new-message', (message) => {
   if (!selectedTicket || Number(message.ticketId) !== Number(selectedTicket.ID)) return;
   drawerMessages.querySelector('[data-empty-messages]')?.remove();
@@ -420,6 +599,7 @@ socket.on('ticket:error', ({ message }) => {
 
 socket.on('message:error', ({ message }) => {
   window.alert(message);
+  pendingQuickReplyText = null;
   if (selectedTicket?.STATUS === 'IN_PROGRESS') {
     agentMessageInput.disabled = false;
     sendAgentMessage.disabled = false;

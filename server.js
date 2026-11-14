@@ -17,6 +17,7 @@ const SESSION_COOKIE = 'agent_session';
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 const sessions = new Map();
 const ticketAccessTokens = new Map();
+const onlineAgents = new Map();
 
 function getSession(cookieHeader = '') {
   const cookie = cookieHeader.split(';').map((part) => part.trim())
@@ -59,6 +60,8 @@ function setSessionCookie(res, token) {
 io.use((socket, next) => {
   const session = getSession(socket.request.headers.cookie);
   socket.data.agentId = session?.agent.ID ?? null;
+  socket.data.departmentId = session?.agent.DEPARTMENT_ID ?? null;
+  socket.data.isAdmin = Boolean(session?.agent.IS_ADMIN);
   next();
 });
 
@@ -120,6 +123,14 @@ app.post('/api/customers/register', async (req, res) => {
       customerId: Number(registration.customer.id)
     });
 
+    const ticket = await store.getTicketAccess(Number(registration.ticket.id));
+    io.to(`department:${departmentId}`).to('administrators').emit('ticket:incoming', {
+      ...ticket,
+      ticketId: Number(registration.ticket.id),
+      fullName,
+      phone,
+      roleJob
+    });
     io.emit('tickets:updated');
 
     return res.status(201).json({
@@ -272,6 +283,111 @@ app.post('/api/tickets/:id/close', requireAgent, async (req, res) => {
   }
 });
 
+app.post('/api/tickets/:id/close-collaborator', async (req, res) => {
+  try {
+    const ticketId = Number(req.params.id);
+    const access = ticketAccessTokens.get(String(req.body.accessToken || ''));
+    const ticket = await store.getTicketAccess(ticketId);
+
+    if (!ticket || !access || access.ticketId !== ticketId || access.customerId !== Number(ticket.customerId)) {
+      return res.status(403).json({ message: 'Acesso inválido a este chamado.' });
+    }
+    if (ticket.status === 'CLOSED') {
+      return res.status(409).json({ message: 'Este chamado já foi encerrado.' });
+    }
+
+    await store.closeTicket(ticketId, ticket.assignedAgentId);
+    io.to(`ticket:${ticketId}`).emit('ticket:status-updated', { ticketId, status: 'CLOSED' });
+    io.emit('tickets:updated');
+    return res.json({ success: true, ticketId, status: 'CLOSED' });
+  } catch (error) {
+    return res.status(500).json({ message: 'Erro ao encerrar chamado', error: error.message });
+  }
+});
+
+app.post('/api/tickets/:id/agents', async (req, res) => {
+  try {
+    const ticketId = Number(req.params.id);
+    const departmentId = Number(req.body.departmentId);
+    const access = ticketAccessTokens.get(String(req.body.accessToken || ''));
+    const ticket = await store.getTicketAccess(ticketId);
+
+    if (!ticket || !access || access.ticketId !== ticketId || access.customerId !== Number(ticket.customerId)) {
+      return res.status(403).json({ message: 'Acesso inválido a este chamado.' });
+    }
+    if (ticket.status === 'CLOSED') {
+      return res.status(409).json({ message: 'Este chamado já foi encerrado.' });
+    }
+
+    const departments = await store.listDepartments();
+    if (!departments.some((department) => Number(department.ID) === departmentId)) {
+      return res.status(404).json({ message: 'Setor não encontrado.' });
+    }
+
+    const agents = (await store.listAgents())
+      .filter((agent) => Number(agent.DEPARTMENT_ID) === departmentId)
+      .map((agent) => ({
+        id: Number(agent.ID),
+        name: agent.NAME,
+        online: onlineAgents.has(Number(agent.ID))
+      }));
+
+    return res.json(agents);
+  } catch (error) {
+    return res.status(500).json({ message: 'Erro ao listar atendentes do setor', error: error.message });
+  }
+});
+
+app.post('/api/tickets/:id/transfer-collaborator', async (req, res) => {
+  try {
+    const ticketId = Number(req.params.id);
+    const departmentId = Number(req.body.departmentId);
+    const agentId = Number(req.body.agentId);
+    const access = ticketAccessTokens.get(String(req.body.accessToken || ''));
+    const ticket = await store.getTicketAccess(ticketId);
+
+    if (!ticket || !access || access.ticketId !== ticketId || access.customerId !== Number(ticket.customerId)) {
+      return res.status(403).json({ message: 'Acesso inválido a este chamado.' });
+    }
+    if (ticket.status === 'CLOSED') {
+      return res.status(409).json({ message: 'Este chamado já foi encerrado.' });
+    }
+    if (!departmentId || !agentId) {
+      return res.status(400).json({ message: 'Selecione o setor e o atendente de destino.' });
+    }
+
+    const departments = await store.listDepartments();
+    const targetDepartment = departments.find((department) => Number(department.ID) === departmentId);
+    const targetAgent = (await store.listAgents()).find((agent) => Number(agent.ID) === agentId);
+    if (!targetDepartment || !targetAgent || Number(targetAgent.DEPARTMENT_ID) !== departmentId) {
+      return res.status(400).json({ message: 'O atendente selecionado não pertence ao setor escolhido.' });
+    }
+
+    const updatedTicket = await store.transferTicketToAgent(ticketId, departmentId, agentId);
+    const update = {
+      ticketId,
+      status: updatedTicket.status,
+      departmentId,
+      departmentName: targetDepartment.NAME,
+      agentId,
+      agentName: targetAgent.NAME,
+      transferred: true
+    };
+    io.to(`ticket:${ticketId}`).emit('ticket:status-updated', update);
+    io.to(`agent:${agentId}`).emit('ticket:incoming', {
+      ...updatedTicket,
+      ticketId,
+      fullName: updatedTicket.fullName || 'Colaborador',
+      departmentName: targetDepartment.NAME,
+      transferred: true
+    });
+    io.emit('tickets:updated');
+    return res.json({ success: true, ...update });
+  } catch (error) {
+    return res.status(500).json({ message: 'Erro ao transferir chamado', error: error.message });
+  }
+});
+
 app.post('/api/tickets/:id/transfer', requireAgent, async (req, res) => {
   try {
     const ticketId = Number(req.params.id);
@@ -309,6 +425,12 @@ app.post('/api/tickets/:id/transfer', requireAgent, async (req, res) => {
       departmentName: targetDepartment.NAME,
       transferred: true
     });
+    io.to(`department:${departmentId}`).to('administrators').emit('ticket:incoming', {
+      ...updatedTicket,
+      ticketId,
+      departmentName: targetDepartment.NAME,
+      transferred: true
+    });
     io.emit('tickets:updated');
 
     return res.json({
@@ -329,7 +451,9 @@ app.get('/api/tickets/:id/messages', requireAgent, async (req, res) => {
     const ticket = await store.getTicketAccess(ticketId);
     if (!ticket || (
       Number(ticket.assignedAgentId) !== Number(req.agent.ID)
-      && !(ticket.status === 'WAITING' && Number(ticket.departmentId) === Number(req.agent.DEPARTMENT_ID))
+      && !(ticket.status === 'WAITING' && (
+        req.agent.IS_ADMIN || Number(ticket.departmentId) === Number(req.agent.DEPARTMENT_ID)
+      ))
     )) {
       return res.status(403).json({ message: 'Você não tem acesso às mensagens deste chamado.' });
     }
@@ -342,6 +466,20 @@ app.get('/api/tickets/:id/messages', requireAgent, async (req, res) => {
 
 io.on('connection', (socket) => {
   socket.data.customerTickets = new Set();
+  if (socket.data.agentId !== null) {
+    const agentId = Number(socket.data.agentId);
+    const connections = onlineAgents.get(agentId) || new Set();
+    connections.add(socket.id);
+    onlineAgents.set(agentId, connections);
+    socket.join(`agent:${agentId}`);
+    if (socket.data.departmentId !== null) {
+      socket.join(`department:${socket.data.departmentId}`);
+    }
+    if (socket.data.isAdmin) {
+      socket.join('administrators');
+    }
+    io.emit('agents:presence-updated');
+  }
 
   socket.on('join-ticket', async ({ ticketId, accessToken } = {}) => {
     const parsedTicketId = Number(ticketId);
@@ -358,20 +496,18 @@ io.on('connection', (socket) => {
         return;
       }
 
-      if (socket.data.agentId !== null) {
-        if (Number(ticket.assignedAgentId) !== Number(socket.data.agentId)) {
-          socket.emit('ticket:error', { message: 'Você não tem acesso a este atendimento.' });
-          return;
-        }
-      } else {
-        const access = ticketAccessTokens.get(String(accessToken || ''));
+      const access = ticketAccessTokens.get(String(accessToken || ''));
+      const isCustomer = access
+        && access.ticketId === parsedTicketId
+        && access.customerId === Number(ticket.customerId);
+      const isAssignedAgent = socket.data.agentId !== null
+        && Number(ticket.assignedAgentId) === Number(socket.data.agentId);
 
-        if (!access || access.ticketId !== parsedTicketId || access.customerId !== Number(ticket.customerId)) {
-          socket.emit('ticket:error', { message: 'Acesso inválido ao atendimento.' });
-          return;
-        }
-
+      if (isCustomer) {
         socket.data.customerTickets.add(parsedTicketId);
+      } else if (!isAssignedAgent) {
+        socket.emit('ticket:error', { message: 'Você não tem acesso a este atendimento.' });
+        return;
       }
 
       socket.join(`ticket:${parsedTicketId}`);
@@ -380,6 +516,20 @@ io.on('connection', (socket) => {
       socket.emit('ticket:error', { message: 'Erro ao acessar o atendimento.' });
       console.error('Erro ao validar acesso ao atendimento:', error.message);
     }
+  });
+
+  socket.on('disconnect', () => {
+    if (socket.data.agentId === null) {
+      return;
+    }
+
+    const agentId = Number(socket.data.agentId);
+    const connections = onlineAgents.get(agentId);
+    connections?.delete(socket.id);
+    if (connections?.size === 0) {
+      onlineAgents.delete(agentId);
+    }
+    io.emit('agents:presence-updated');
   });
 
   socket.on('send-message', async ({ ticketId, senderType, text }) => {
@@ -434,6 +584,14 @@ io.on('connection', (socket) => {
       });
 
       io.to(`ticket:${parsedTicketId}`).emit('new-message', message);
+      if (normalizedSenderType === 'CUSTOMER' && ticket.assignedAgentId) {
+        io.to(`agent:${ticket.assignedAgentId}`).emit('ticket:message', {
+          ticketId: parsedTicketId,
+          messageText: trimmedText,
+          customerId: ticket.customerId,
+          departmentId: ticket.departmentId
+        });
+      }
       io.emit('tickets:updated');
     } catch (error) {
       socket.emit('message:error', { message: 'Erro ao enviar mensagem', error: error.message });
