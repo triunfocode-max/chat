@@ -39,6 +39,7 @@ Por padrão, `STORAGE=memory`: não é necessário instalar ou conectar a um ban
 STORAGE=supabase
 SUPABASE_DB_URL=postgresql://postgres.[PROJECT-REF]:[PASSWORD]@[POOLER-HOST]:5432/postgres
 SUPABASE_CA_CERT=
+DATA_ENCRYPTION_KEY=
 ADMIN_EMAIL=admin@empresa.com
 ADMIN_PASSWORD=uma-senha-forte-com-pelo-menos-12-caracteres
 AGENTS_JSON=[{"name":"Atendente Financeiro","email":"financeiro@empresa.com","password":"outra-senha-forte-com-pelo-menos-12-caracteres","departmentId":2}]
@@ -49,6 +50,14 @@ O servidor cria/atualiza as contas configuradas no primeiro início. Em produç�
 Mantenha `SUPABASE_DB_URL`, `ADMIN_PASSWORD` e as senhas em `AGENTS_JSON` somente nas variáveis privadas do ambiente de execução. Não compartilhe nem publique o `.env`, a senha do banco ou uma chave `service_role`; esta integração usa a conexão PostgreSQL diretamente no servidor.
 
 As conexões usam TLS com validação do certificado. Se o provedor do banco exigir um certificado raiz próprio, informe o caminho do arquivo em `SUPABASE_CA_CERT`. Os chamados, mensagens, clientes e agentes ficam no PostgreSQL. Os tokens de acesso dos colaboradores são armazenados como hashes; o token em texto puro não é gravado no banco. A configuração não importa automaticamente dados de uma instalação anterior do Firebird ou da memória.
+
+### Criptografia e proteção dos dados
+
+No modo Supabase, configure `DATA_ENCRYPTION_KEY` como uma chave Base64 gerada a partir de 32 bytes aleatórios. Gere-a localmente com `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` e cadastre o resultado diretamente como variável privada no Render; não a envie pelo chat, GitHub ou `.env` versionado. Configure e faça backup seguro da chave **antes** do próximo deploy: sem ela o servidor não inicia no modo Supabase. Guarde uma cópia em um gerenciador de segredos seguro. Perder ou substituir a chave sem uma migração de recriptografia torna os dados existentes irrecuperáveis.
+
+Na inicialização, o servidor migra registros existentes e criptografa mensagens, nomes, cargos e telefones dos clientes e nomes e e-mails dos atendentes com AES-256-GCM. Índices HMAC permitem localizar clientes por telefone e atendentes por e-mail sem manter esses valores em texto puro; senhas continuam armazenadas com bcrypt. A migração é repetível e interrompe a inicialização se a chave estiver ausente, incorreta ou os dados não puderem ser decifrados. A aplicação decifra os campos somente no servidor para exibi-los às pessoas autorizadas. Isso protege dados em repouso no banco, não substitui HTTPS nem significa criptografia ponta a ponta.
+
+O servidor também aplica cabeçalhos de segurança, validação de origem nas operações de escrita, limite de tamanho das solicitações e limitação de requisições/login/mensagens. O `.gitignore` exclui arquivos de ambiente, certificados, bancos locais, logs e a pasta de uploads. O sistema ainda não possui envio de anexos; mantenha arquivos privados fora do repositório.
 
 ## Usar Firebird (opcional)
 

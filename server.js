@@ -5,19 +5,38 @@ const http = require('http');
 const path = require('path');
 const { createHash, randomBytes } = require('crypto');
 const bcrypt = require('bcryptjs');
+const helmet = require('helmet');
+const { rateLimit } = require('express-rate-limit');
 const { Server } = require('socket.io');
 const store = require('./config/store');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  maxHttpBufferSize: 16 * 1024,
+  perMessageDeflate: false
+});
 
 const PORT = Number(process.env.PORT || 3000);
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const SESSION_COOKIE = 'agent_session';
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 const sessions = new Map();
 const ticketAccessTokens = new Map();
 const onlineAgents = new Map();
+const SAFE_ERROR_MESSAGES = new Set([
+  'DATA_ENCRYPTION_KEY deve ser uma chave Base64 válida de 32 bytes.',
+  'Formato de dado criptografado inválido.',
+  'Parâmetros criptográficos inválidos.',
+  'Não foi possível descriptografar os dados. Verifique a chave de criptografia.'
+]);
+
+function safeErrorDetail(error) {
+  if (SAFE_ERROR_MESSAGES.has(error?.message)) {
+    return error.message;
+  }
+  return error?.code || error?.name || 'erro interno';
+}
 
 async function getTicketAccessForToken(ticketId, accessToken) {
   const token = String(accessToken || '');
@@ -68,25 +87,126 @@ function requireAgent(req, res, next) {
   return next();
 }
 
+function requireSameOrigin(req, res, next) {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    return next();
+  }
+
+  const origin = req.get('origin');
+  if (!origin) {
+    if (IS_PRODUCTION) {
+      return res.status(403).json({ message: 'Origem da solicitação não autorizada.' });
+    }
+    return next();
+  }
+
+  try {
+    const parsedOrigin = new URL(origin);
+    const sameHost = parsedOrigin.host.toLowerCase() === req.get('host')?.toLowerCase();
+    const secureOrigin = !IS_PRODUCTION || parsedOrigin.protocol === 'https:';
+    if (sameHost && secureOrigin) {
+      return next();
+    }
+  } catch {
+    return res.status(403).json({ message: 'Origem da solicitação não autorizada.' });
+  }
+
+  return res.status(403).json({ message: 'Origem da solicitação não autorizada.' });
+}
+
+function sendServerError(res, error, context, message) {
+  console.error(`${context}:`, safeErrorDetail(error));
+  return res.status(500).json({ message });
+}
+
 function setSessionCookie(res, token) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const secure = IS_PRODUCTION ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
-    `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DURATION_MS / 1000}${secure}`
+    `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_DURATION_MS / 1000}; Priority=High${secure}`
   );
 }
 
 io.use((socket, next) => {
+  const origin = socket.handshake.headers.origin;
+  const host = socket.handshake.headers.host;
+  if (IS_PRODUCTION && (!origin || !host)) {
+    return next(new Error('Origem não autorizada.'));
+  }
+  if (origin) {
+    try {
+      const parsedOrigin = new URL(origin);
+      if (
+        parsedOrigin.host.toLowerCase() !== host?.toLowerCase()
+        || (IS_PRODUCTION && parsedOrigin.protocol !== 'https:')
+      ) {
+        return next(new Error('Origem não autorizada.'));
+      }
+    } catch {
+      return next(new Error('Origem não autorizada.'));
+    }
+  }
+
   const session = getSession(socket.request.headers.cookie);
   socket.data.agentId = session?.agent.ID ?? null;
   socket.data.departmentId = session?.agent.DEPARTMENT_ID ?? null;
   socket.data.isAdmin = Boolean(session?.agent.IS_ADMIN);
-  next();
+  return next();
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.disable('x-powered-by');
+app.set('trust proxy', IS_PRODUCTION ? 1 : false);
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", 'https://cdn.tailwindcss.com'],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      connectSrc: ["'self'", 'ws:', 'wss:'],
+      imgSrc: ["'self'", 'data:', 'blob:'],
+      fontSrc: ["'self'", 'data:'],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+      ...(IS_PRODUCTION ? { upgradeInsecureRequests: [] } : {})
+    }
+  },
+  hsts: IS_PRODUCTION
+    ? { maxAge: 31536000, includeSubDomains: true }
+    : false
+}));
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  return requireSameOrigin(req, res, next);
+});
+app.use(express.json({ limit: '16kb' }));
+app.use(express.urlencoded({ extended: false, limit: '8kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+const loginRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Muitas tentativas de login. Tente novamente mais tarde.' }
+});
+const apiRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Muitas solicitações. Tente novamente em instantes.' }
+});
+const registrationRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Muitas solicitações. Tente novamente mais tarde.' }
+});
+app.use('/api', apiRateLimit);
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'multi-atendimento-web' });
@@ -96,7 +216,7 @@ app.get('/api/departments', async (req, res) => {
   try {
     res.json(await store.listDepartments());
   } catch (error) {
-    res.status(500).json({ message: 'Erro ao listar departamentos', error: error.message });
+    sendServerError(res, error, 'Falha ao listar departamentos', 'Não foi possível listar os setores.');
   }
 });
 
@@ -115,18 +235,23 @@ app.post('/api/departments', requireAgent, async (req, res) => {
       department: result.department
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao cadastrar setor/departamento', error: error.message });
+    return sendServerError(res, error, 'Falha ao cadastrar setor', 'Não foi possível cadastrar o setor.');
   }
 });
 
-app.post('/api/customers/register', async (req, res) => {
+app.post('/api/customers/register', registrationRateLimit, async (req, res) => {
   try {
     const fullName = String(req.body.fullName || '').trim();
     const roleJob = String(req.body.roleJob || '').trim();
     const phone = String(req.body.phone || '').trim();
     const departmentId = Number(req.body.departmentId);
 
-    if (!fullName || !roleJob || !phone || !departmentId) {
+    if (
+      !fullName || fullName.length > 150
+      || !roleJob || roleJob.length > 150
+      || !phone || phone.length > 40
+      || !Number.isSafeInteger(departmentId) || departmentId < 1
+    ) {
       return res.status(400).json({ message: 'Nome, cargo, telefone e departamento são obrigatórios.' });
     }
 
@@ -163,11 +288,11 @@ app.post('/api/customers/register', async (req, res) => {
       }
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao cadastrar cliente e criar ticket', error: error.message });
+    return sendServerError(res, error, 'Falha ao cadastrar cliente', 'Não foi possível abrir o chamado.');
   }
 });
 
-app.post('/api/agents/login', async (req, res) => {
+app.post('/api/agents/login', loginRateLimit, async (req, res) => {
   try {
     const email = String(req.body.email || '').trim();
     const password = String(req.body.password || '');
@@ -207,7 +332,7 @@ app.post('/api/agents/login', async (req, res) => {
       }
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao autenticar atendente', error: error.message });
+    return sendServerError(res, error, 'Falha na autenticação', 'Não foi possível autenticar.');
   }
 });
 
@@ -220,8 +345,8 @@ app.post('/api/agents/logout', (req, res) => {
     sessions.delete(cookie.slice(SESSION_COOKIE.length + 1));
   }
 
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+  const secure = IS_PRODUCTION ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Priority=High${secure}`);
   return res.json({ success: true });
 });
 
@@ -240,7 +365,7 @@ app.get('/api/tickets/dashboard', requireAgent, async (req, res) => {
         : (await store.listDepartments()).find((department) => Number(department.ID) === departmentId)?.NAME || 'Setor'
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao consultar fila de atendimento', error: error.message });
+    return sendServerError(res, error, 'Falha ao consultar fila', 'Não foi possível carregar os atendimentos.');
   }
 });
 
@@ -275,7 +400,7 @@ app.post('/api/tickets/:id/assign', requireAgent, async (req, res) => {
 
     return res.json({ success: true, ticketId, status: 'IN_PROGRESS', agentId });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao puxar atendimento', error: error.message });
+    return sendServerError(res, error, 'Falha ao assumir chamado', 'Não foi possível assumir o chamado.');
   }
 });
 
@@ -300,7 +425,7 @@ app.post('/api/tickets/:id/close', requireAgent, async (req, res) => {
 
     return res.json({ success: true, ticketId, status: 'CLOSED' });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao encerrar atendimento', error: error.message });
+    return sendServerError(res, error, 'Falha ao encerrar atendimento', 'Não foi possível encerrar o chamado.');
   }
 });
 
@@ -322,7 +447,7 @@ app.post('/api/tickets/:id/close-collaborator', async (req, res) => {
     io.emit('tickets:updated');
     return res.json({ success: true, ticketId, status: 'CLOSED' });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao encerrar chamado', error: error.message });
+    return sendServerError(res, error, 'Falha ao encerrar chamado', 'Não foi possível encerrar o chamado.');
   }
 });
 
@@ -355,7 +480,7 @@ app.post('/api/tickets/:id/agents', async (req, res) => {
 
     return res.json(agents);
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao listar atendentes do setor', error: error.message });
+    return sendServerError(res, error, 'Falha ao listar atendentes', 'Não foi possível listar os atendentes.');
   }
 });
 
@@ -385,6 +510,9 @@ app.post('/api/tickets/:id/transfer-collaborator', async (req, res) => {
     }
 
     const updatedTicket = await store.transferTicketToAgent(ticketId, departmentId, agentId);
+    if (!updatedTicket) {
+      return res.status(409).json({ message: 'O chamado mudou. Atualize a tela e tente novamente.' });
+    }
     const update = {
       ticketId,
       status: updatedTicket.status,
@@ -405,7 +533,7 @@ app.post('/api/tickets/:id/transfer-collaborator', async (req, res) => {
     io.emit('tickets:updated');
     return res.json({ success: true, ...update });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao transferir chamado', error: error.message });
+    return sendServerError(res, error, 'Falha ao transferir chamado', 'Não foi possível transferir o chamado.');
   }
 });
 
@@ -462,7 +590,7 @@ app.post('/api/tickets/:id/transfer', requireAgent, async (req, res) => {
       departmentName: targetDepartment.NAME
     });
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao transferir chamado', error: error.message });
+    return sendServerError(res, error, 'Falha ao transferir chamado', 'Não foi possível transferir o chamado.');
   }
 });
 
@@ -481,12 +609,14 @@ app.get('/api/tickets/:id/messages', requireAgent, async (req, res) => {
 
     return res.json(await store.getMessages(ticketId));
   } catch (error) {
-    return res.status(500).json({ message: 'Erro ao carregar mensagens', error: error.message });
+    return sendServerError(res, error, 'Falha ao carregar mensagens', 'Não foi possível carregar as mensagens.');
   }
 });
 
 io.on('connection', (socket) => {
   socket.data.customerTickets = new Set();
+  let messageWindowStartedAt = Date.now();
+  let messagesInWindow = 0;
   if (socket.data.agentId !== null) {
     const agentId = Number(socket.data.agentId);
     const connections = onlineAgents.get(agentId) || new Set();
@@ -502,7 +632,10 @@ io.on('connection', (socket) => {
     io.emit('agents:presence-updated');
   }
 
-  socket.on('join-ticket', async ({ ticketId, accessToken } = {}) => {
+  socket.on('join-ticket', async (payload = {}) => {
+    const { ticketId, accessToken } = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload
+      : {};
     const parsedTicketId = Number(ticketId);
 
     if (!parsedTicketId) {
@@ -523,10 +656,13 @@ io.on('connection', (socket) => {
         && access.customerId === Number(ticket.customerId);
       const isAssignedAgent = socket.data.agentId !== null
         && Number(ticket.assignedAgentId) === Number(socket.data.agentId);
+      const isQueueAgent = socket.data.agentId !== null
+        && ticket.status === 'WAITING'
+        && (socket.data.isAdmin || Number(ticket.departmentId) === Number(socket.data.departmentId));
 
       if (isCustomer) {
         socket.data.customerTickets.add(parsedTicketId);
-      } else if (!isAssignedAgent) {
+      } else if (!isAssignedAgent && !isQueueAgent) {
         socket.emit('ticket:error', { message: 'Você não tem acesso a este atendimento.' });
         return;
       }
@@ -535,7 +671,7 @@ io.on('connection', (socket) => {
       socket.emit('ticket:joined', { ticketId: parsedTicketId });
     } catch (error) {
       socket.emit('ticket:error', { message: 'Erro ao acessar o atendimento.' });
-      console.error('Erro ao validar acesso ao atendimento:', error.message);
+      console.error('Falha ao validar acesso ao atendimento:', safeErrorDetail(error));
     }
   });
 
@@ -553,7 +689,21 @@ io.on('connection', (socket) => {
     io.emit('agents:presence-updated');
   });
 
-  socket.on('send-message', async ({ ticketId, senderType, text }) => {
+  socket.on('send-message', async (payload = {}) => {
+    const now = Date.now();
+    if (now - messageWindowStartedAt >= 60 * 1000) {
+      messageWindowStartedAt = now;
+      messagesInWindow = 0;
+    }
+    messagesInWindow += 1;
+    if (messagesInWindow > 30) {
+      socket.emit('message:error', { message: 'Limite de mensagens atingido. Aguarde um minuto.' });
+      return;
+    }
+
+    const { ticketId, senderType, text } = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload
+      : {};
     const parsedTicketId = Number(ticketId);
     const normalizedSenderType = String(senderType || '').toUpperCase();
     const trimmedText = String(text || '').trim();
@@ -615,13 +765,28 @@ io.on('connection', (socket) => {
       }
       io.emit('tickets:updated');
     } catch (error) {
-      socket.emit('message:error', { message: 'Erro ao enviar mensagem', error: error.message });
+      console.error('Falha ao enviar mensagem:', safeErrorDetail(error));
+      socket.emit('message:error', { message: 'Não foi possível enviar a mensagem.' });
     }
   });
 });
 
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.use((error, req, res, next) => {
+  if (res.headersSent) {
+    return next(error);
+  }
+  const status = Number(error.status || error.statusCode);
+  const isClientError = status >= 400 && status < 500;
+  console.error('Falha ao processar solicitação:', error?.type || safeErrorDetail(error));
+  return res.status(isClientError ? status : 500).json({
+    message: isClientError
+      ? 'Solicitação inválida ou muito grande.'
+      : 'Ocorreu um erro interno.'
+  });
 });
 
 async function startServer() {
@@ -635,7 +800,7 @@ async function startServer() {
 }
 
 startServer().catch(async (error) => {
-  console.error('Falha ao iniciar o servidor:', error);
+  console.error('Falha ao iniciar o servidor:', safeErrorDetail(error));
   if (typeof store.close === 'function') {
     await store.close();
   }
