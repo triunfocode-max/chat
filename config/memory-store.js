@@ -10,7 +10,7 @@ const departments = [
   { ID: 3, NAME: 'Suporte Técnico', AI_ENABLED: false, AI_INSTRUCTIONS: '' },
   { ID: 4, NAME: 'Vendas', AI_ENABLED: false, AI_INSTRUCTIONS: '' }
 ];
-const defaultAgent = {
+const defaultAgent = { 
   ID: 1,
   NAME: 'Atendente Admin',
   EMAIL: process.env.ADMIN_EMAIL || 'admin@empresa.com',
@@ -289,3 +289,4 @@ module.exports = {
   createAiMessageIfWaiting,
   markTicketAiHandoff
 };
+

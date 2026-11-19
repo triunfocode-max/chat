@@ -10,3 +10,5 @@ if (storage === 'memory') {
 } else {
   throw new Error(`Armazenamento inválido: ${storage}. Use "memory", "firebird" ou "supabase".`);
 }
+ 
+

@@ -40,3 +40,4 @@ test('creates stable, scoped blind indexes', () => {
   assert.equal(createBlindIndex('email', 'Pessoa@Exemplo.com'), createBlindIndex('email', ' pessoa@exemplo.com '));
   assert.notEqual(createBlindIndex('email', 'pessoa@exemplo.com'), createBlindIndex('phone', 'pessoa@exemplo.com'));
 });
+

@@ -75,3 +75,4 @@ INSERT INTO AGENTS (NAME, EMAIL, PASSWORD_HASH, DEPARTMENT_ID)
 VALUES ('Atendente Admin', 'admin@empresa.com', '$2a$10$qX2ckWwxuz0hXR94tkZUhu00l9h4oULBt4nW0jataDivtUcPRUYei', 1);
 
 COMMIT;
+

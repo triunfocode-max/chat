@@ -168,7 +168,7 @@ async function encryptExistingData() {
         emailLookupHash
       ]
     );
-  }
+  }  
 
   const messages = await pool.query(
     `SELECT id, message_text
@@ -581,3 +581,4 @@ module.exports = {
     return access ? { ticketId: access.TICKET_ID, customerId: access.CUSTOMER_ID } : null;
   }
 };
+

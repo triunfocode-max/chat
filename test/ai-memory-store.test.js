@@ -31,3 +31,4 @@ test('persists department instructions and stops AI after handing a ticket to a 
   assert.equal(store.getTicketAccess(ticket.id).aiHandoff, false);
   assert.ok(store.createAiMessageIfWaiting({ ticketId: ticket.id, text: 'Resposta após transferência.' }));
 });
+

@@ -17,7 +17,7 @@ function getEncryptionKey() {
 
   const encodedKey = process.env.DATA_ENCRYPTION_KEY;
   const key = Buffer.from(encodedKey || '', 'base64');
-
+ 
   if (
     key.length !== 32
     || key.toString('base64') !== encodedKey
@@ -112,3 +112,4 @@ module.exports = {
   decryptField,
   encryptField
 };
+

@@ -128,3 +128,4 @@ Crie um serviço **Web Service** ligado ao repositório do projeto, usando runti
 Não envie o arquivo local `.env` nem a pasta `node_modules` ao repositório. Após o deploy, compartilhe o endereço do serviço: a tela do colaborador fica na raiz (`/`) e o painel do atendente em `/admin.html`.
 
 O serviço precisa permanecer com uma única instância para que as conexões Socket.IO em tempo real sejam compartilhadas. O Supabase persiste os dados entre reinícios e deploys, mas a presença online e as sessões dos atendentes permanecem em memória no servidor.
+

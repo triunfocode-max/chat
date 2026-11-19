@@ -20,7 +20,7 @@ function buildConversationMessages({ departmentName, instructions, messages }) {
         role: 'user',
         parts: [{ text: String(message.messageText || '').slice(0, 1000) }]
       }];
-    }
+    } 
     if (senderType === 'BOT' || senderType === 'AGENT') {
       return [{
         role: 'model',
@@ -115,3 +115,4 @@ module.exports = {
   generateDepartmentReply,
   parseAssistantResponse
 };
+

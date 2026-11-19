@@ -17,8 +17,8 @@ function getConnection() {
         return reject(err);
       }
 
-      resolve(db);
-    });
+      resolve(db); 
+    }); 
   });
 }
 
@@ -60,3 +60,4 @@ module.exports = {
   query,
   execute
 };
+

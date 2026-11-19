@@ -385,3 +385,4 @@ loadDepartments().catch((error) => {
   departmentSelect.replaceChildren(new Option('Erro ao carregar setores', ''));
   formError.textContent = error.message;
 });
+

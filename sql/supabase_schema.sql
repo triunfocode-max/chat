@@ -99,3 +99,4 @@ DROP INDEX IF EXISTS idx_customers_phone;
 CREATE INDEX IF NOT EXISTS idx_customers_phone_lookup_hash ON customers (phone_lookup_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_email_lookup_hash ON agents (email_lookup_hash)
     WHERE email_lookup_hash IS NOT NULL;
+

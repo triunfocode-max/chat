@@ -10,7 +10,7 @@ const normalizeRows = (rows = []) => rows.map((row) => {
   return normalized;
 });
 
-let aiSettingsColumnsPromise;
+let aiSettingsColumnsPromise; 
 
 async function ensureAiSettingsColumns() {
   if (!aiSettingsColumnsPromise) {
@@ -313,3 +313,4 @@ module.exports = {
     };
   }
 };
+
