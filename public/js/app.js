@@ -31,7 +31,8 @@ function showPanel(panel) {
 
 function addMessage(message) {
   const item = document.createElement('div');
-  const isCustomer = String(message.senderType).toUpperCase() === 'CUSTOMER';
+  const senderType = String(message.senderType).toUpperCase();
+  const isCustomer = senderType === 'CUSTOMER';
   item.className = `max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm shadow-sm ${
     isCustomer
       ? 'ml-auto rounded-br-md bg-sky-700 text-white'
@@ -40,7 +41,7 @@ function addMessage(message) {
 
   const sender = document.createElement('div');
   sender.className = `mb-1 text-[10px] font-semibold uppercase tracking-wide ${isCustomer ? 'text-sky-100' : 'text-slate-400'}`;
-  sender.textContent = isCustomer ? 'Você' : 'Atendente';
+  sender.textContent = isCustomer ? 'Você' : senderType === 'BOT' ? 'Assistente IA' : 'Atendente';
   const text = document.createElement('div');
   text.textContent = message.messageText;
   item.append(sender, text);
@@ -335,6 +336,18 @@ socket.on('new-message', (message) => {
   if (currentTicket && Number(message.ticketId) === Number(currentTicket.id)) {
     addMessage(message);
     sendButton.disabled = false;
+  }
+});
+
+socket.on('ticket:ai-handoff', ({ ticketId }) => {
+  if (currentTicket && Number(ticketId) === Number(currentTicket.id)) {
+    chatNotice.textContent = 'Vou encaminhar sua solicitação para um atendente do setor.';
+  }
+});
+
+socket.on('ticket:ai-fallback', ({ ticketId }) => {
+  if (currentTicket && Number(ticketId) === Number(currentTicket.id)) {
+    chatNotice.textContent = 'A IA não conseguiu responder. Sua mensagem continua na fila para um atendente.';
   }
 });
 

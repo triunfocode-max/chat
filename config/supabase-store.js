@@ -190,6 +190,15 @@ async function encryptExistingData() {
 async function initialize() {
   createBlindIndex('key-check', 'initialized');
   await pool.query(`
+    ALTER TABLE departments
+      ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS ai_instructions TEXT NOT NULL DEFAULT ''
+  `);
+  await pool.query(`
+    ALTER TABLE tickets
+      ADD COLUMN IF NOT EXISTS ai_handoff BOOLEAN NOT NULL DEFAULT FALSE
+  `);
+  await pool.query(`
     ALTER TABLE customers
       ALTER COLUMN full_name TYPE TEXT,
       ALTER COLUMN role_job TYPE TEXT,
@@ -203,6 +212,12 @@ async function initialize() {
       ADD COLUMN IF NOT EXISTS email_lookup_hash VARCHAR(64)
   `);
   await encryptExistingData();
+  await pool.query('ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_sender_type_check');
+  await pool.query(`
+    ALTER TABLE messages
+      ADD CONSTRAINT messages_sender_type_check
+      CHECK (sender_type IN ('CUSTOMER', 'AGENT', 'BOT'))
+  `);
   await pool.query(
     'CREATE INDEX IF NOT EXISTS idx_customers_phone_lookup_hash ON customers (phone_lookup_hash)'
   );
@@ -266,6 +281,18 @@ async function createDepartment(name) {
     department: { id: Number(department.ID), name: department.NAME },
     created: inserted.rowCount > 0
   };
+}
+
+async function updateDepartmentAiSettings(departmentId, { enabled, instructions }) {
+  const result = await pool.query(
+    `UPDATE departments
+     SET ai_enabled = $2, ai_instructions = $3
+     WHERE id = $1
+     RETURNING id AS "ID", name AS "NAME", ai_enabled AS "AI_ENABLED",
+               ai_instructions AS "AI_INSTRUCTIONS"`,
+    [departmentId, enabled, instructions]
+  );
+  return normalizeRows(result.rows)[0] || null;
 }
 
 async function registerCustomer({ fullName, roleJob, phone, departmentId, accessTokenHash }) {
@@ -360,6 +387,7 @@ async function getTicketAccess(ticketId) {
             T.ASSIGNED_AGENT_ID AS "ASSIGNED_AGENT_ID",
             T.STATUS AS "STATUS",
             T.DEPARTMENT_ID AS "DEPARTMENT_ID",
+            T.AI_HANDOFF AS "AI_HANDOFF",
             D.NAME AS "DEPARTMENT_NAME",
             C.FULL_NAME AS "FULL_NAME",
             C.PHONE AS "PHONE",
@@ -379,6 +407,7 @@ async function getTicketAccess(ticketId) {
   return {
     customerId: ticket.CUSTOMER_ID,
     assignedAgentId: ticket.ASSIGNED_AGENT_ID,
+    aiHandoff: Boolean(ticket.AI_HANDOFF),
     status: ticket.STATUS,
     departmentId: ticket.DEPARTMENT_ID,
     departmentName: ticket.DEPARTMENT_NAME,
@@ -391,7 +420,8 @@ async function getTicketAccess(ticketId) {
 async function transferTicket(ticketId, departmentId) {
   await pool.query(
     `UPDATE tickets
-     SET department_id = $1, assigned_agent_id = NULL, status = 'WAITING', updated_at = CURRENT_TIMESTAMP
+     SET department_id = $1, assigned_agent_id = NULL, status = 'WAITING',
+         ai_handoff = FALSE, updated_at = CURRENT_TIMESTAMP
      WHERE id = $2`,
     [departmentId, ticketId]
   );
@@ -401,7 +431,8 @@ async function transferTicket(ticketId, departmentId) {
 async function transferTicketToAgent(ticketId, departmentId, agentId) {
   const result = await pool.query(
     `UPDATE tickets
-     SET department_id = $1, assigned_agent_id = $2, status = 'IN_PROGRESS', updated_at = CURRENT_TIMESTAMP
+     SET department_id = $1, assigned_agent_id = $2, status = 'IN_PROGRESS',
+         ai_handoff = FALSE, updated_at = CURRENT_TIMESTAMP
      WHERE id = $3
        AND EXISTS (SELECT 1 FROM agents WHERE id = $2 AND department_id = $1)`,
     [departmentId, agentId, ticketId]
@@ -448,14 +479,49 @@ async function createMessage({ ticketId, senderType, senderId, text }) {
   };
 }
 
+async function createAiMessageIfWaiting({ ticketId, text }) {
+  const result = await pool.query(
+    `INSERT INTO messages (ticket_id, sender_type, sender_id, message_text)
+     SELECT t.id, 'BOT', NULL, $2
+     FROM tickets t
+     WHERE t.id = $1 AND t.status = 'WAITING'
+       AND t.assigned_agent_id IS NULL AND t.ai_handoff = FALSE
+     RETURNING id AS "ID", created_at AS "CREATED_AT"`,
+    [ticketId, encryptField(text)]
+  );
+  const message = result.rows[0];
+  return message ? {
+    id: Number(message.ID),
+    ticketId,
+    senderType: 'BOT',
+    senderId: null,
+    messageText: text,
+    createdAt: message.CREATED_AT
+  } : null;
+}
+
+async function markTicketAiHandoff(ticketId) {
+  const result = await pool.query(
+    `UPDATE tickets SET ai_handoff = TRUE
+     WHERE id = $1 AND status = 'WAITING' AND assigned_agent_id IS NULL`,
+    [ticketId]
+  );
+  return result.rowCount > 0;
+}
+
 module.exports = {
   initialize,
   close: () => pool.end(),
   listDepartments: async () => {
-    const result = await pool.query('SELECT id AS "ID", name AS "NAME" FROM departments ORDER BY name');
+    const result = await pool.query(
+      `SELECT id AS "ID", name AS "NAME", ai_enabled AS "AI_ENABLED",
+              ai_instructions AS "AI_INSTRUCTIONS"
+       FROM departments ORDER BY name`
+    );
     return normalizeRows(result.rows);
   },
   createDepartment,
+  updateDepartmentAiSettings,
   registerCustomer,
   findAgentByEmail: async (email) => {
     const result = await pool.query(
@@ -502,6 +568,8 @@ module.exports = {
     })).sort((first, second) => first.NAME.localeCompare(second.NAME));
   },
   createMessage,
+  createAiMessageIfWaiting,
+  markTicketAiHandoff,
   findTicketByAccessTokenHash: async (ticketId, accessTokenHash) => {
     const result = await pool.query(
       `SELECT id AS "TICKET_ID", customer_id AS "CUSTOMER_ID"

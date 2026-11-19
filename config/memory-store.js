@@ -5,10 +5,10 @@ if (process.env.NODE_ENV === 'production' && (!process.env.ADMIN_EMAIL || !proce
 }
 
 const departments = [
-  { ID: 1, NAME: 'Atendimento' },
-  { ID: 2, NAME: 'Financeiro' },
-  { ID: 3, NAME: 'Suporte Técnico' },
-  { ID: 4, NAME: 'Vendas' }
+  { ID: 1, NAME: 'Atendimento', AI_ENABLED: false, AI_INSTRUCTIONS: '' },
+  { ID: 2, NAME: 'Financeiro', AI_ENABLED: false, AI_INSTRUCTIONS: '' },
+  { ID: 3, NAME: 'Suporte Técnico', AI_ENABLED: false, AI_INSTRUCTIONS: '' },
+  { ID: 4, NAME: 'Vendas', AI_ENABLED: false, AI_INSTRUCTIONS: '' }
 ];
 const defaultAgent = {
   ID: 1,
@@ -75,10 +75,21 @@ function createDepartment(name) {
     return { department: { id: existing.ID, name: existing.NAME }, created: false };
   }
 
-  const department = { ID: nextDepartmentId++, NAME: name };
+  const department = { ID: nextDepartmentId++, NAME: name, AI_ENABLED: false, AI_INSTRUCTIONS: '' };
   departments.push(department);
 
   return { department: { id: department.ID, name: department.NAME }, created: true };
+}
+
+function updateDepartmentAiSettings(departmentId, { enabled, instructions }) {
+  const department = departments.find((item) => item.ID === departmentId);
+  if (!department) {
+    return null;
+  }
+
+  department.AI_ENABLED = enabled;
+  department.AI_INSTRUCTIONS = instructions;
+  return department;
 }
 
 function registerCustomer({ fullName, roleJob, phone, departmentId }) {
@@ -104,6 +115,7 @@ function registerCustomer({ fullName, roleJob, phone, departmentId }) {
     CUSTOMER_ID: customer.ID,
     DEPARTMENT_ID: departmentId,
     ASSIGNED_AGENT_ID: null,
+    AI_HANDOFF: false,
     STATUS: 'WAITING',
     CREATED_AT: timestamp,
     UPDATED_AT: timestamp
@@ -179,6 +191,7 @@ function transferTicket(ticketId, departmentId) {
 
   ticket.DEPARTMENT_ID = departmentId;
   ticket.ASSIGNED_AGENT_ID = null;
+  ticket.AI_HANDOFF = false;
   ticket.STATUS = 'WAITING';
   ticket.UPDATED_AT = new Date().toISOString();
   return getTicketAccess(ticketId);
@@ -194,6 +207,7 @@ function transferTicketToAgent(ticketId, departmentId, agentId) {
 
   ticket.DEPARTMENT_ID = departmentId;
   ticket.ASSIGNED_AGENT_ID = agentId;
+  ticket.AI_HANDOFF = false;
   ticket.STATUS = 'IN_PROGRESS';
   ticket.UPDATED_AT = new Date().toISOString();
   return getTicketAccess(ticketId);
@@ -210,6 +224,23 @@ function createMessage({ ticketId, senderType, senderId, text }) {
   };
   messages.push(message);
   return message;
+}
+
+function createAiMessageIfWaiting({ ticketId, text }) {
+  const ticket = tickets.find((item) => item.ID === ticketId);
+  if (!ticket || ticket.STATUS !== 'WAITING' || ticket.ASSIGNED_AGENT_ID || ticket.AI_HANDOFF) {
+    return null;
+  }
+  return createMessage({ ticketId, senderType: 'BOT', senderId: null, text });
+}
+
+function markTicketAiHandoff(ticketId) {
+  const ticket = tickets.find((item) => item.ID === ticketId);
+  if (!ticket || ticket.STATUS !== 'WAITING' || ticket.ASSIGNED_AGENT_ID) {
+    return false;
+  }
+  ticket.AI_HANDOFF = true;
+  return true;
 }
 
 function getMessages(ticketId) {
@@ -230,6 +261,7 @@ function getTicketAccess(ticketId) {
   return {
     customerId: ticket.CUSTOMER_ID,
     assignedAgentId: ticket.ASSIGNED_AGENT_ID,
+    aiHandoff: ticket.AI_HANDOFF,
     status: ticket.STATUS,
     departmentId: ticket.DEPARTMENT_ID,
     departmentName: departments.find((department) => department.ID === ticket.DEPARTMENT_ID)?.NAME,
@@ -242,6 +274,7 @@ function getTicketAccess(ticketId) {
 module.exports = {
   listDepartments: () => departments.slice().sort((a, b) => a.NAME.localeCompare(b.NAME)),
   createDepartment,
+  updateDepartmentAiSettings,
   registerCustomer,
   findAgentByEmail: (email) => agents.find((agent) => agent.EMAIL === email) || null,
   getDashboard,
@@ -252,5 +285,7 @@ module.exports = {
   transferTicketToAgent,
   getMessages,
   listAgents,
-  createMessage
+  createMessage,
+  createAiMessageIfWaiting,
+  markTicketAiHandoff
 };

@@ -15,6 +15,8 @@
 
 ## Instalação
 
+Requer Node.js 18 ou superior.
+
 1. Instale as dependências:
 
 ```bash
@@ -58,6 +60,14 @@ No modo Supabase, configure `DATA_ENCRYPTION_KEY` como uma chave Base64 gerada a
 Na inicialização, o servidor migra registros existentes e criptografa mensagens, nomes, cargos e telefones dos clientes e nomes e e-mails dos atendentes com AES-256-GCM. Índices HMAC permitem localizar clientes por telefone e atendentes por e-mail sem manter esses valores em texto puro; senhas continuam armazenadas com bcrypt. A migração é repetível e interrompe a inicialização se a chave estiver ausente, incorreta ou os dados não puderem ser decifrados. A aplicação decifra os campos somente no servidor para exibi-los às pessoas autorizadas. Isso protege dados em repouso no banco, não substitui HTTPS nem significa criptografia ponta a ponta.
 
 O servidor também aplica cabeçalhos de segurança, validação de origem nas operações de escrita, limite de tamanho das solicitações e limitação de requisições/login/mensagens. O `.gitignore` exclui arquivos de ambiente, certificados, bancos locais, logs e a pasta de uploads. O sistema ainda não possui envio de anexos; mantenha arquivos privados fora do repositório.
+
+## Assistente de IA por setor
+
+O assistente responde automaticamente às mensagens enquanto o chamado estiver aguardando na fila. Quando um atendente assume o chamado, as respostas automáticas param e o atendimento continua com a pessoa. Um administrador pode abrir **Configurar IA** no painel e definir se a IA está ativa e as orientações específicas de cada setor. Novos setores começam com a IA desativada.
+
+Configure `GEMINI_API_KEY` como variável privada no ambiente do servidor; opcionalmente, defina `GEMINI_MODEL` (padrão `gemini-3.5-flash-lite`). Crie a chave no [Google AI Studio](https://aistudio.google.com/apikey). Sem a chave, é possível salvar as orientações, mas não ativar respostas. Mensagens sem resposta confiável ou que precisem de uma pessoa são sinalizadas para encaminhamento humano; falhas do provedor não geram uma resposta inventada e o chamado permanece na fila.
+
+A integração envia ao Gemini o nome do setor, as orientações cadastradas e até as últimas 20 mensagens da conversa. Nome, telefone e outros campos do cadastro não são enviados pela integração. Antes de ativar, revise as políticas internas de privacidade e o tratamento de dados aplicável à empresa. Não coloque credenciais, dados pessoais ou informações confidenciais nas orientações do setor. No Supabase, as configurações de IA são aplicadas automaticamente na inicialização; no Firebird, o servidor adiciona as colunas necessárias ao banco existente.
 
 ## Usar Firebird (opcional)
 

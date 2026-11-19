@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Sistema de atendimento ao cliente em tempo real com armazenamento em memória, Firebird ou Supabase",
   "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"

@@ -9,6 +9,7 @@ const helmet = require('helmet');
 const { rateLimit } = require('express-rate-limit');
 const { Server } = require('socket.io');
 const store = require('./config/store');
+const { generateDepartmentReply } = require('./config/ai-agent');
 
 const app = express();
 const server = http.createServer(app);
@@ -24,6 +25,7 @@ const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
 const sessions = new Map();
 const ticketAccessTokens = new Map();
 const onlineAgents = new Map();
+const aiReplyQueues = new Map();
 const SAFE_ERROR_MESSAGES = new Set([
   'DATA_ENCRYPTION_KEY deve ser uma chave Base64 válida de 32 bytes.',
   'Formato de dado criptografado inválido.',
@@ -36,6 +38,13 @@ function safeErrorDetail(error) {
     return error.message;
   }
   return error?.code || error?.name || 'erro interno';
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.agent.IS_ADMIN) {
+    return res.status(403).json({ message: 'Somente administradores podem configurar a IA.' });
+  }
+  return next();
 }
 
 async function getTicketAccessForToken(ticketId, accessToken) {
@@ -127,6 +136,71 @@ function setSessionCookie(res, token) {
   );
 }
 
+async function replyWithAi(ticketId) {
+  const ticket = await store.getTicketAccess(ticketId);
+  if (!ticket || ticket.status !== 'WAITING' || ticket.assignedAgentId || ticket.aiHandoff) {
+    return;
+  }
+
+  const department = (await store.listDepartments())
+    .find((item) => Number(item.ID) === Number(ticket.departmentId));
+  if (!department || !department.AI_ENABLED) {
+    return;
+  }
+
+  const messages = await store.getMessages(ticketId);
+  const generated = await generateDepartmentReply({
+    departmentName: department.NAME,
+    instructions: department.AI_INSTRUCTIONS,
+    messages
+  });
+
+  const currentTicket = await store.getTicketAccess(ticketId);
+  if (
+    !currentTicket
+    || currentTicket.status !== 'WAITING'
+    || currentTicket.assignedAgentId
+    || Number(currentTicket.departmentId) !== Number(ticket.departmentId)
+  ) {
+    return;
+  }
+
+  const message = await store.createAiMessageIfWaiting({ ticketId, text: generated.reply });
+  if (!message) return;
+
+  const handedOff = generated.handoff && await store.markTicketAiHandoff(ticketId);
+
+  io.to(`ticket:${ticketId}`).emit('new-message', message);
+  io.emit('tickets:updated');
+
+  if (handedOff) {
+    io.to(`department:${ticket.departmentId}`).to('administrators').emit('ticket:ai-handoff', {
+      ticketId,
+      departmentId: ticket.departmentId,
+      departmentName: ticket.departmentName,
+      fullName: ticket.fullName
+    });
+  }
+}
+
+function queueAiReply(ticketId) {
+  const previous = aiReplyQueues.get(ticketId) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(() => replyWithAi(ticketId))
+    .catch((error) => {
+      console.error('Falha ao gerar resposta da IA:', error?.message || safeErrorDetail(error));
+      io.to(`ticket:${ticketId}`).emit('ticket:ai-fallback', { ticketId });
+      io.emit('tickets:updated');
+    })
+    .finally(() => {
+      if (aiReplyQueues.get(ticketId) === next) {
+        aiReplyQueues.delete(ticketId);
+      }
+    });
+  aiReplyQueues.set(ticketId, next);
+}
+
 io.use((socket, next) => {
   const origin = socket.handshake.headers.origin;
   const host = socket.handshake.headers.host;
@@ -214,9 +288,52 @@ app.get('/api/health', (req, res) => {
 
 app.get('/api/departments', async (req, res) => {
   try {
-    res.json(await store.listDepartments());
+    const departments = await store.listDepartments();
+    res.json(departments.map(({ ID, NAME }) => ({ ID, NAME })));
   } catch (error) {
     sendServerError(res, error, 'Falha ao listar departamentos', 'Não foi possível listar os setores.');
+  }
+});
+
+app.get('/api/departments/ai', requireAgent, requireAdmin, async (req, res) => {
+  try {
+    return res.json({
+      configured: Boolean(process.env.GEMINI_API_KEY),
+      model: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
+      departments: await store.listDepartments()
+    });
+  } catch (error) {
+    return sendServerError(res, error, 'Falha ao consultar configurações da IA', 'Não foi possível carregar as configurações da IA.');
+  }
+});
+
+app.post('/api/departments/:id/ai', requireAgent, requireAdmin, async (req, res) => {
+  try {
+    const departmentId = Number(req.params.id);
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body
+      : {};
+    const enabled = body.enabled;
+    const instructions = typeof body.instructions === 'string' ? body.instructions.trim() : null;
+
+    if (
+      !Number.isSafeInteger(departmentId) || departmentId < 1
+      || typeof enabled !== 'boolean'
+      || instructions === null || instructions.length > 4000
+    ) {
+      return res.status(400).json({ message: 'Setor ou orientações inválidas. O limite das orientações é 4000 caracteres.' });
+    }
+    if (enabled && !process.env.GEMINI_API_KEY) {
+      return res.status(503).json({ message: 'Configure GEMINI_API_KEY no servidor antes de ativar a IA.' });
+    }
+
+    const department = await store.updateDepartmentAiSettings(departmentId, { enabled, instructions });
+    if (!department) {
+      return res.status(404).json({ message: 'Setor não encontrado.' });
+    }
+    return res.json({ success: true, department });
+  } catch (error) {
+    return sendServerError(res, error, 'Falha ao salvar configurações da IA', 'Não foi possível salvar as configurações da IA.');
   }
 });
 
@@ -764,6 +881,9 @@ io.on('connection', (socket) => {
         });
       }
       io.emit('tickets:updated');
+      if (normalizedSenderType === 'CUSTOMER' && ticket.status === 'WAITING' && !ticket.assignedAgentId) {
+        queueAiReply(parsedTicketId);
+      }
     } catch (error) {
       console.error('Falha ao enviar mensagem:', safeErrorDetail(error));
       socket.emit('message:error', { message: 'Não foi possível enviar a mensagem.' });

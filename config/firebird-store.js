@@ -1,4 +1,4 @@
-const { query } = require('./db');
+const { execute, query } = require('./db');
 
 const normalizeRows = (rows = []) => rows.map((row) => {
   const normalized = {};
@@ -9,6 +9,37 @@ const normalizeRows = (rows = []) => rows.map((row) => {
 
   return normalized;
 });
+
+let aiSettingsColumnsPromise;
+
+async function ensureAiSettingsColumns() {
+  if (!aiSettingsColumnsPromise) {
+    aiSettingsColumnsPromise = (async () => {
+      const fields = normalizeRows(await query(
+        `SELECT TRIM(RDB$FIELD_NAME) AS FIELD_NAME
+         FROM RDB$RELATION_FIELDS
+         WHERE RDB$RELATION_NAME = 'DEPARTMENTS'`
+      )).map((field) => String(field.FIELD_NAME).trim().toUpperCase());
+      const ticketFields = normalizeRows(await query(
+        `SELECT TRIM(RDB$FIELD_NAME) AS FIELD_NAME
+         FROM RDB$RELATION_FIELDS
+         WHERE RDB$RELATION_NAME = 'TICKETS'`
+      )).map((field) => String(field.FIELD_NAME).trim().toUpperCase());
+
+      if (!fields.includes('AI_ENABLED')) {
+        await execute('ALTER TABLE DEPARTMENTS ADD AI_ENABLED SMALLINT DEFAULT 0 NOT NULL');
+      }
+      if (!fields.includes('AI_INSTRUCTIONS')) {
+        await execute("ALTER TABLE DEPARTMENTS ADD AI_INSTRUCTIONS VARCHAR(4000) DEFAULT '' NOT NULL");
+      }
+      if (!ticketFields.includes('AI_HANDOFF')) {
+        await execute('ALTER TABLE TICKETS ADD AI_HANDOFF SMALLINT DEFAULT 0 NOT NULL');
+      }
+    })();
+  }
+
+  await aiSettingsColumnsPromise;
+}
 
 async function createDepartment(name) {
   const existing = normalizeRows(
@@ -32,7 +63,56 @@ async function createDepartment(name) {
   };
 }
 
+async function updateDepartmentAiSettings(departmentId, { enabled, instructions }) {
+  await ensureAiSettingsColumns();
+  const result = normalizeRows(await query(
+    `UPDATE DEPARTMENTS
+     SET AI_ENABLED = ?, AI_INSTRUCTIONS = ?
+     WHERE ID = ?
+     RETURNING ID, NAME, AI_ENABLED, AI_INSTRUCTIONS`,
+    [enabled ? 1 : 0, instructions, departmentId]
+  ));
+  const department = result[0];
+  return department
+    ? { ...department, AI_ENABLED: Number(department.AI_ENABLED) === 1 }
+    : null;
+}
+
+async function createAiMessageIfWaiting({ ticketId, text }) {
+  await ensureAiSettingsColumns();
+  const result = normalizeRows(await query(
+    `INSERT INTO MESSAGES (TICKET_ID, SENDER_TYPE, SENDER_ID, MESSAGE_TEXT, CREATED_AT)
+     SELECT T.ID, 'BOT', NULL, ?, CURRENT_TIMESTAMP
+     FROM TICKETS T
+     WHERE T.ID = ? AND T.STATUS = 'WAITING'
+       AND T.ASSIGNED_AGENT_ID IS NULL AND T.AI_HANDOFF = 0
+     RETURNING ID, CREATED_AT`,
+    [text, ticketId]
+  ));
+  const message = result[0];
+  return message ? {
+    id: message.ID,
+    ticketId,
+    senderType: 'BOT',
+    senderId: null,
+    messageText: text,
+    createdAt: message.CREATED_AT
+  } : null;
+}
+
+async function markTicketAiHandoff(ticketId) {
+  await ensureAiSettingsColumns();
+  const result = await query(
+    `UPDATE TICKETS SET AI_HANDOFF = 1
+     WHERE ID = ? AND STATUS = 'WAITING' AND ASSIGNED_AGENT_ID IS NULL
+     RETURNING ID`,
+    [ticketId]
+  );
+  return result.length > 0;
+}
+
 async function registerCustomer({ fullName, roleJob, phone, departmentId }) {
+  await ensureAiSettingsColumns();
   const existing = normalizeRows(
     await query('SELECT ID FROM CUSTOMERS WHERE PHONE = ?', [phone])
   );
@@ -97,9 +177,11 @@ async function getDashboard(agentId, departmentId, isAdmin = false) {
 }
 
 async function getTicketAccess(ticketId) {
+  await ensureAiSettingsColumns();
   const rows = normalizeRows(
     await query(
-      `SELECT T.CUSTOMER_ID, T.ASSIGNED_AGENT_ID, T.STATUS, T.DEPARTMENT_ID, D.NAME AS DEPARTMENT_NAME,
+      `SELECT T.CUSTOMER_ID, T.ASSIGNED_AGENT_ID, T.STATUS, T.DEPARTMENT_ID, T.AI_HANDOFF,
+              D.NAME AS DEPARTMENT_NAME,
               C.FULL_NAME, C.PHONE, C.ROLE_JOB
        FROM TICKETS T
        INNER JOIN DEPARTMENTS D ON D.ID = T.DEPARTMENT_ID
@@ -117,6 +199,7 @@ async function getTicketAccess(ticketId) {
   return {
     customerId: ticket.CUSTOMER_ID,
     assignedAgentId: ticket.ASSIGNED_AGENT_ID,
+    aiHandoff: Number(ticket.AI_HANDOFF) === 1,
     status: ticket.STATUS,
     departmentId: ticket.DEPARTMENT_ID,
     departmentName: ticket.DEPARTMENT_NAME,
@@ -127,9 +210,11 @@ async function getTicketAccess(ticketId) {
 }
 
 async function transferTicket(ticketId, departmentId) {
+  await ensureAiSettingsColumns();
   await query(
     `UPDATE TICKETS
-     SET DEPARTMENT_ID = ?, ASSIGNED_AGENT_ID = NULL, STATUS = 'WAITING', UPDATED_AT = CURRENT_TIMESTAMP
+     SET DEPARTMENT_ID = ?, ASSIGNED_AGENT_ID = NULL, STATUS = 'WAITING',
+         AI_HANDOFF = 0, UPDATED_AT = CURRENT_TIMESTAMP
      WHERE ID = ?`,
     [departmentId, ticketId]
   );
@@ -137,9 +222,11 @@ async function transferTicket(ticketId, departmentId) {
 }
 
 async function transferTicketToAgent(ticketId, departmentId, agentId) {
+  await ensureAiSettingsColumns();
   await query(
     `UPDATE TICKETS
-     SET DEPARTMENT_ID = ?, ASSIGNED_AGENT_ID = ?, STATUS = 'IN_PROGRESS', UPDATED_AT = CURRENT_TIMESTAMP
+     SET DEPARTMENT_ID = ?, ASSIGNED_AGENT_ID = ?, STATUS = 'IN_PROGRESS',
+         AI_HANDOFF = 0, UPDATED_AT = CURRENT_TIMESTAMP
      WHERE ID = ?`,
     [departmentId, agentId, ticketId]
   );
@@ -166,8 +253,19 @@ async function getMessages(ticketId) {
 }
 
 module.exports = {
-  listDepartments: async () => normalizeRows(await query('SELECT ID, NAME FROM DEPARTMENTS ORDER BY NAME')),
+  listDepartments: async () => {
+    await ensureAiSettingsColumns();
+    return normalizeRows(
+      await query('SELECT ID, NAME, AI_ENABLED, AI_INSTRUCTIONS FROM DEPARTMENTS ORDER BY NAME')
+    ).map((department) => ({
+      ...department,
+      AI_ENABLED: Number(department.AI_ENABLED) === 1
+    }));
+  },
   createDepartment,
+  updateDepartmentAiSettings,
+  createAiMessageIfWaiting,
+  markTicketAiHandoff,
   registerCustomer,
   findAgentByEmail: async (email) => {
     const rows = normalizeRows(

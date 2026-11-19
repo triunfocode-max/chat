@@ -33,6 +33,14 @@ const quickReplySubtitle = document.getElementById('quickReplySubtitle');
 const quickReplyMessage = document.getElementById('quickReplyMessage');
 const quickReplyError = document.getElementById('quickReplyError');
 const sendQuickReply = document.getElementById('sendQuickReply');
+const aiSettingsButton = document.getElementById('aiSettingsButton');
+const aiSettingsDialog = document.getElementById('aiSettingsDialog');
+const aiDepartmentSelect = document.getElementById('aiDepartmentSelect');
+const aiEnabledInput = document.getElementById('aiEnabledInput');
+const aiInstructionsInput = document.getElementById('aiInstructionsInput');
+const aiSettingsStatus = document.getElementById('aiSettingsStatus');
+const aiSettingsError = document.getElementById('aiSettingsError');
+const saveAiSettingsButton = document.getElementById('saveAiSettingsButton');
 
 let currentAgent = null;
 let dashboard = { waiting: [], myTickets: [], closed: [] };
@@ -41,6 +49,8 @@ let selectedTicket = null;
 let activeFilter = 'queue';
 let quickReplyTicket = null;
 let pendingQuickReplyText = null;
+let aiSettingsConfigured = false;
+let aiDepartments = [];
 const notifiedTicketIds = new Set();
 
 function escapeHtml(value) {
@@ -178,7 +188,9 @@ function showIncomingNotification(incoming, eventType = 'ticket') {
   toast.className = 'cursor-pointer rounded-xl border border-sky-200 bg-white p-4 shadow-xl transition hover:-translate-y-0.5';
   const title = document.createElement('p');
   title.className = 'font-semibold text-slate-800';
-  title.textContent = eventType === 'message'
+  title.textContent = eventType === 'handoff'
+    ? `${ticket.FULL_NAME} · IA solicitou atendimento humano`
+    : eventType === 'message'
     ? `${ticket.FULL_NAME} · nova mensagem`
     : `${ticket.FULL_NAME} · novo chamado`;
   const detail = document.createElement('p');
@@ -217,7 +229,8 @@ function showIncomingNotification(incoming, eventType = 'ticket') {
 }
 
 function renderMessage(message) {
-  const isAgent = String(message.senderType).toUpperCase() === 'AGENT';
+  const senderType = String(message.senderType).toUpperCase();
+  const isAgent = senderType === 'AGENT';
   const item = document.createElement('div');
   item.className = `max-w-[82%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 text-sm shadow-sm ${
     isAgent ? 'ml-auto rounded-br-md bg-sky-700 text-white' : 'mr-auto rounded-bl-md border border-slate-200 bg-white text-slate-700'
@@ -226,7 +239,7 @@ function renderMessage(message) {
   const meta = document.createElement('div');
   meta.className = `mb-1 flex gap-3 text-[10px] font-semibold uppercase tracking-wide ${isAgent ? 'text-sky-100' : 'text-slate-400'}`;
   const author = document.createElement('span');
-  author.textContent = isAgent ? 'Você' : 'Colaborador';
+  author.textContent = isAgent ? 'Você' : senderType === 'BOT' ? 'Assistente IA' : 'Colaborador';
   const time = document.createElement('span');
   time.textContent = ticketTime(message.createdAt);
   const text = document.createElement('div');
@@ -347,6 +360,45 @@ function hideTransferDialog() {
   transferDialog.classList.remove('flex');
 }
 
+function selectedAiDepartment() {
+  return aiDepartments.find((department) => Number(department.ID) === Number(aiDepartmentSelect.value));
+}
+
+function renderAiDepartmentSettings() {
+  const department = selectedAiDepartment();
+  aiEnabledInput.checked = Boolean(department?.AI_ENABLED);
+  aiEnabledInput.disabled = !aiSettingsConfigured;
+  aiInstructionsInput.value = department?.AI_INSTRUCTIONS || '';
+}
+
+async function openAiSettings() {
+  aiSettingsError.classList.add('hidden');
+  try {
+    const response = await fetch('/api/departments/ai');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Não foi possível carregar as configurações.');
+
+    aiSettingsConfigured = data.configured;
+    aiDepartments = data.departments || [];
+    aiDepartmentSelect.replaceChildren(...aiDepartments.map(
+      (department) => new Option(department.NAME, department.ID)
+    ));
+    aiSettingsStatus.textContent = aiSettingsConfigured
+      ? `IA configurada · modelo ${data.model}. Ativa somente enquanto o chamado estiver na fila.`
+      : 'Configure GEMINI_API_KEY no servidor para ativar respostas automáticas.';
+    renderAiDepartmentSettings();
+    aiSettingsDialog.classList.remove('hidden');
+    aiSettingsDialog.classList.add('flex');
+  } catch (error) {
+    window.alert(error.message);
+  }
+}
+
+function closeAiSettings() {
+  aiSettingsDialog.classList.add('hidden');
+  aiSettingsDialog.classList.remove('flex');
+}
+
 document.querySelectorAll('.filterButton').forEach((button) => {
   button.addEventListener('click', () => {
     activeFilter = button.dataset.filter;
@@ -375,6 +427,7 @@ loginForm.addEventListener('submit', async (event) => {
     if (!response.ok) throw new Error(data.message || 'Não foi possível entrar.');
 
     currentAgent = data.agent;
+    aiSettingsButton.classList.toggle('hidden', !currentAgent.isAdmin);
     if ('Notification' in window && Notification.permission === 'default') {
       await Notification.requestPermission();
     }
@@ -396,6 +449,43 @@ notificationButton.addEventListener('click', () => {
   activeFilter = 'queue';
   updateFilterButtons();
   renderTicketList();
+});
+
+aiSettingsButton.addEventListener('click', openAiSettings);
+aiDepartmentSelect.addEventListener('change', renderAiDepartmentSettings);
+document.getElementById('closeAiSettings').addEventListener('click', closeAiSettings);
+document.getElementById('cancelAiSettings').addEventListener('click', closeAiSettings);
+saveAiSettingsButton.addEventListener('click', async () => {
+  const departmentId = Number(aiDepartmentSelect.value);
+  saveAiSettingsButton.disabled = true;
+  aiSettingsError.classList.add('hidden');
+  try {
+    const response = await fetch(`/api/departments/${departmentId}/ai`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: aiEnabledInput.checked,
+        instructions: aiInstructionsInput.value
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Não foi possível salvar as configurações.');
+    aiDepartments = aiDepartments.map((department) => (
+      Number(department.ID) === departmentId ? data.department : department
+    ));
+    renderAiDepartmentSettings();
+    closeAiSettings();
+  } catch (error) {
+    aiSettingsError.textContent = error.message;
+    aiSettingsError.classList.remove('hidden');
+  } finally {
+    saveAiSettingsButton.disabled = false;
+  }
+});
+
+socket.on('ticket:ai-handoff', (ticket) => {
+  loadDashboard();
+  showIncomingNotification(ticket, 'handoff');
 });
 
 document.getElementById('closeQuickReply').addEventListener('click', closeQuickReply);
