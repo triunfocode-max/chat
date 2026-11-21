@@ -19,6 +19,7 @@ const io = new Server(server, {
 });
 
 const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || '0.0.0.0';
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const SESSION_COOKIE = 'agent_session';
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
@@ -141,7 +142,9 @@ async function replyWithAi(ticketId) {
   }
 
   const messages = await store.getMessages(ticketId);
-  const products = Number(ticket.departmentId) === 4 && typeof store.listProducts === 'function'
+  const expectedLastMessageId = messages.length ? messages[messages.length - 1].id : null;
+  const isSalesDepartment = String(department.NAME).trim().toLowerCase() === 'vendas';
+  const products = isSalesDepartment && typeof store.listProducts === 'function'
     ? await store.listProducts()
     : [];
   const generated = await generateDepartmentReply({
@@ -149,7 +152,8 @@ async function replyWithAi(ticketId) {
     instructions: department.AI_INSTRUCTIONS,
     additionalContext: department.AI_ADDITIONAL_CONTEXT,
     products,
-    messages
+    messages,
+    initialGreeting: messages.length === 0
   });
 
   const currentTicket = await store.getTicketAccess(ticketId);
@@ -157,12 +161,25 @@ async function replyWithAi(ticketId) {
     !currentTicket
     || currentTicket.status !== 'WAITING'
     || currentTicket.assignedAgentId
+    || currentTicket.aiHandoff
     || Number(currentTicket.departmentId) !== Number(ticket.departmentId)
   ) {
     return;
   }
 
-  const message = await store.createAiMessageIfWaiting({ ticketId, text: generated.reply });
+  const latestMessages = await store.getMessages(ticketId);
+  const latestMessageId = latestMessages.length
+    ? latestMessages[latestMessages.length - 1].id
+    : null;
+  if (latestMessageId !== expectedLastMessageId) {
+    return;
+  }
+
+  const message = await store.createAiMessageIfWaiting({
+    ticketId,
+    text: generated.reply,
+    expectedLastMessageId
+  });
   if (!message) return;
 
   const handedOff = generated.handoff && await store.markTicketAiHandoff(ticketId);
@@ -419,6 +436,7 @@ app.post('/api/customers/register', registrationRateLimit, async (req, res) => {
       roleJob
     });
     io.emit('tickets:updated');
+    queueAiReply(Number(registration.ticket.id));
 
     return res.status(201).json({
       success: true,
@@ -722,6 +740,7 @@ app.post('/api/tickets/:id/transfer', requireAgent, async (req, res) => {
       transferred: true
     });
     io.emit('tickets:updated');
+    queueAiReply(ticketId);
 
     return res.json({
       success: true,
@@ -809,7 +828,7 @@ io.on('connection', (socket) => {
       }
 
       socket.join(`ticket:${parsedTicketId}`);
-      socket.emit('ticket:joined', { ticketId: parsedTicketId });
+      socket.emit('ticket:joined', { ticketId: parsedTicketId, status: ticket.status });
       socket.emit('ticket:history', {
         ticketId: parsedTicketId,
         messages: await store.getMessages(parsedTicketId)
@@ -966,7 +985,7 @@ async function startServer() {
     await store.initialize();
   }
 
-  server.listen(PORT, () => {
+  server.listen(PORT, HOST, () => {
     console.log(`Servidor rodando em http://localhost:${PORT}`);
   });
 }

@@ -5,6 +5,7 @@ const { Pool } = require('pg');
 const {
   DEFAULT_DEPARTMENT_GUIDANCE,
   DEFAULT_NEW_DEPARTMENT_GUIDANCE,
+  LEGACY_DEFAULT_SALES_GUIDANCE,
   TEST_SALES_PRODUCTS
 } = require('./ai-seed-data');
 
@@ -180,6 +181,13 @@ async function initialize() {
       ]
     );
   }
+
+  await pool.query(
+    `UPDATE departments
+     SET ai_instructions = $1
+     WHERE LOWER(BTRIM(name)) = 'vendas' AND ai_instructions = $2`,
+    [DEFAULT_DEPARTMENT_GUIDANCE[4], LEGACY_DEFAULT_SALES_GUIDANCE]
+  );
 
   await pool.query(`
     SELECT setval(
@@ -464,15 +472,20 @@ async function createMessage({ ticketId, senderType, senderId, text, attachment 
   };
 }
 
-async function createAiMessageIfWaiting({ ticketId, text }) {
+async function createAiMessageIfWaiting({ ticketId, text, expectedLastMessageId }) {
   const result = await pool.query(
     `INSERT INTO messages (ticket_id, sender_type, sender_id, message_text)
      SELECT t.id, 'BOT', NULL, $2
      FROM tickets t
      WHERE t.id = $1 AND t.status = 'WAITING'
        AND t.assigned_agent_id IS NULL AND t.ai_handoff = FALSE
+       AND NOT EXISTS (
+         SELECT 1 FROM messages newer
+         WHERE newer.ticket_id = t.id
+           AND newer.id > COALESCE($3::INTEGER, 0)
+       )
      RETURNING id AS "ID", created_at AS "CREATED_AT"`,
-    [ticketId, text]
+    [ticketId, text, expectedLastMessageId ?? null]
   );
   const message = result.rows[0];
   return message ? {

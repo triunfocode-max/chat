@@ -258,10 +258,19 @@ function createMessage({ ticketId, senderType, senderId, text, attachment }) {
   return message;
 }
 
-function createAiMessageIfWaiting({ ticketId, text }) {
+function createAiMessageIfWaiting({ ticketId, text, expectedLastMessageId }) {
   const ticket = tickets.find((item) => item.ID === ticketId);
   if (!ticket || ticket.STATUS !== 'WAITING' || ticket.ASSIGNED_AGENT_ID || ticket.AI_HANDOFF) {
     return null;
+  }
+  if (expectedLastMessageId !== undefined) {
+    const ticketMessages = getMessages(ticketId);
+    const latestMessageId = ticketMessages.length
+      ? ticketMessages[ticketMessages.length - 1].id
+      : null;
+    if (latestMessageId !== expectedLastMessageId) {
+      return null;
+    }
   }
   return createMessage({ ticketId, senderType: 'BOT', senderId: null, text });
 }

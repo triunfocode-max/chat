@@ -28,6 +28,13 @@ let selectedAttachment = null;
 const customerQueueKey = 'multiatende_pending_messages';
 const customerSessionKey = 'multiatende_customer_session';
 
+function updateCustomerComposer() {
+  const unavailable = !currentTicket || currentTicket.status === 'CLOSED';
+  messageInput.disabled = unavailable;
+  sendButton.disabled = unavailable;
+  attachmentInput.disabled = unavailable;
+}
+
 function showPanel(panel) {
   [rolePanel, formPanel, chatPanel].forEach((item) => item.classList.add('hidden'));
   panel.classList.remove('hidden');
@@ -42,6 +49,9 @@ function addMessage(message) {
       ? 'ml-auto rounded-br-md bg-sky-700 text-white'
       : 'mr-auto rounded-bl-md border border-slate-200 bg-white text-slate-700'
   }`;
+  if (message.id !== undefined) {
+    item.dataset.messageId = String(message.id);
+  }
 
   const sender = document.createElement('div');
   sender.className = `mb-1 text-[10px] font-semibold uppercase tracking-wide ${isCustomer ? 'text-sky-100' : 'text-slate-400'}`;
@@ -73,6 +83,9 @@ function addMessage(message) {
 }
 
 function setStatus(status, departmentName, transferred = false) {
+  if (currentTicket) {
+    currentTicket.status = status;
+  }
   const labels = {
     WAITING: ['Na fila', 'bg-amber-50 text-amber-700'],
     IN_PROGRESS: ['Em atendimento', 'bg-emerald-50 text-emerald-700'],
@@ -96,10 +109,9 @@ function setStatus(status, departmentName, transferred = false) {
 
   if (status === 'CLOSED') {
     chatNotice.textContent = 'Este atendimento foi encerrado.';
-    messageInput.disabled = true;
-    sendButton.disabled = true;
     collaboratorActions.classList.add('hidden');
   }
+  updateCustomerComposer();
 }
 
 async function loadDepartments() {
@@ -150,13 +162,7 @@ customerForm.addEventListener('submit', async (event) => {
     chatDepartment.textContent = departmentSelect.selectedOptions[0].textContent;
     chatMessages.replaceChildren();
     chatNotice.textContent = 'Conectando ao atendimento...';
-    addMessage({
-      senderType: 'AGENT',
-      messageText: 'Olá! Seu chamado foi criado. Um atendente do setor responderá em breve.'
-    });
     messageInput.value = '';
-    messageInput.disabled = true;
-    sendButton.disabled = true;
     setStatus('WAITING', chatDepartment.textContent);
     showPanel(chatPanel);
     joinCurrentTicket();
@@ -284,8 +290,7 @@ confirmCollaboratorTransfer.addEventListener('click', async () => {
     currentTicket.agentId = data.agentId;
     closeTransferDialog();
     setStatus(data.status, data.departmentName, true);
-    messageInput.disabled = !joinedTicketId;
-    sendButton.disabled = messageInput.disabled;
+    updateCustomerComposer();
   } catch (error) {
     collaboratorTransferError.textContent = error.message;
     collaboratorTransferError.classList.remove('hidden');
@@ -355,7 +360,7 @@ function flushPendingMessages() {
 chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const text = messageInput.value.trim();
-  if (!currentTicket || (!text && !selectedAttachment)) {
+  if (!currentTicket || currentTicket.status === 'CLOSED' || (!text && !selectedAttachment)) {
     return;
   }
 
@@ -369,14 +374,17 @@ chatForm.addEventListener('submit', (event) => {
   };
   if (!socket.connected || !joinedTicketId) {
     savePendingMessages([...readPendingMessages(), payload]);
-    chatNotice.textContent = 'Sem conexão. Sua mensagem será enviada ao reconectar.';
+    chatNotice.textContent = socket.connected
+      ? 'Conectando ao atendimento. Sua mensagem será enviada assim que conectar.'
+      : 'Sem conexão. Sua mensagem será enviada ao reconectar.';
   } else {
     socket.emit('send-message', payload);
+    chatNotice.textContent = 'Enviando mensagem...';
   }
   messageInput.value = '';
   attachmentInput.value = '';
   selectedAttachment = null;
-  chatNotice.textContent = 'Enviando mensagem...';
+  updateCustomerComposer();
 });
 
 socket.on('connect', () => {
@@ -387,20 +395,19 @@ socket.on('connect', () => {
 socket.on('disconnect', () => {
   joinedTicketId = null;
   if (currentTicket) {
-    messageInput.disabled = currentTicket.status === 'CLOSED';
-    sendButton.disabled = messageInput.disabled;
+    updateCustomerComposer();
     chatNotice.textContent = 'Conexão interrompida. Tentando reconectar...';
   }
 });
 
-socket.on('ticket:joined', ({ ticketId }) => {
+socket.on('ticket:joined', ({ ticketId, status }) => {
   if (!currentTicket || Number(ticketId) !== Number(currentTicket.id)) {
     return;
   }
 
   joinedTicketId = Number(ticketId);
-  messageInput.disabled = false;
-  sendButton.disabled = false;
+  if (status) currentTicket.status = status;
+  updateCustomerComposer();
   messageInput.focus();
   chatNotice.textContent = 'Você está conectado. Pode enviar sua mensagem.';
   flushPendingMessages();
@@ -408,21 +415,20 @@ socket.on('ticket:joined', ({ ticketId }) => {
 
 socket.on('ticket:history', ({ ticketId, messages }) => {
   if (!currentTicket || Number(ticketId) !== Number(currentTicket.id)) return;
+  const historyIds = new Set(messages.map((message) => String(message.id)));
+  const arrivedDuringHistory = [...chatMessages.children].filter((item) => (
+    item.dataset.messageId && !historyIds.has(item.dataset.messageId)
+  ));
   chatMessages.replaceChildren();
-  if (messages.length === 0) {
-    addMessage({
-      senderType: 'AGENT',
-      messageText: 'Olá! Seu chamado foi criado. Um atendente do setor responderá em breve.'
-    });
-  } else {
-    messages.forEach(addMessage);
-  }
+  messages.forEach(addMessage);
+  arrivedDuringHistory.forEach((item) => chatMessages.appendChild(item));
+  chatMessages.scrollTop = chatMessages.scrollHeight;
 });
 
 socket.on('new-message', (message) => {
   if (currentTicket && Number(message.ticketId) === Number(currentTicket.id)) {
     addMessage(message);
-    sendButton.disabled = false;
+    updateCustomerComposer();
     if (message.tempId) {
       savePendingMessages(readPendingMessages().filter((item) => item.tempId !== message.tempId));
     }
@@ -446,11 +452,8 @@ socket.on('ticket:status-updated', ({ ticketId, status, departmentName, transfer
     return;
   }
 
+  currentTicket.status = status;
   setStatus(status, departmentName, transferred);
-  if (status !== 'CLOSED') {
-    messageInput.disabled = !joinedTicketId;
-    sendButton.disabled = messageInput.disabled;
-  }
 });
 
 socket.on('agents:presence-updated', () => {
@@ -468,7 +471,7 @@ socket.on('ticket:error', ({ message }) => {
 
 socket.on('message:error', ({ message }) => {
   chatNotice.textContent = message;
-  sendButton.disabled = false;
+  updateCustomerComposer();
 });
 
 try {

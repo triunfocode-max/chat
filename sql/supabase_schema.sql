@@ -102,6 +102,14 @@ INSERT INTO departments (id, name) VALUES
     (4, 'Vendas')
 ON CONFLICT (id) DO NOTHING;
 
+UPDATE departments
+SET ai_instructions = 'Atenda primeiro as dúvidas de vendas consultando os produtos ativos no catálogo do banco de dados (nome, descrição, preço e estoque). Ajude a comparar itens e continue o atendimento mesmo quando o colaborador demonstrar intenção de compra. Não invente produtos, descontos, prazos ou disponibilidade, nem confirme ou registre pedidos. Transfira para um vendedor somente se o colaborador pedir explicitamente ou se a informação necessária não estiver no catálogo e você não puder responder com segurança.'
+WHERE LOWER(BTRIM(name)) = 'vendas'
+  AND (
+      ai_instructions = ''
+      OR ai_instructions = 'Ajude com informações dos produtos de teste cadastrados no catálogo. Informe preços e estoque somente conforme o catálogo e identifique-os como dados de demonstração. Não invente produtos, descontos, prazos ou disponibilidade; encaminhe pedidos de compra e dúvidas fora do catálogo para um vendedor.'
+  );
+
 SELECT setval(
     pg_get_serial_sequence('departments', 'id'),
     GREATEST((SELECT COALESCE(MAX(id), 1) FROM departments), 1)
