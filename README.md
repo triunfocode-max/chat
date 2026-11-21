@@ -19,6 +19,7 @@ Requer Node.js 18 ou superior.
 
 ```bash
 npm install
+npm run build
 ```
 
 2. Inicie o sistema sem banco de dados:
@@ -44,7 +45,7 @@ ADMIN_PASSWORD=uma-senha-forte-com-pelo-menos-12-caracteres
 AGENTS_JSON=[{"name":"Atendente Financeiro","email":"financeiro@empresa.com","password":"outra-senha-forte-com-pelo-menos-12-caracteres","departmentId":2}]
 ```
 
-O servidor cria/atualiza as contas configuradas no primeiro início. Em produção, use senhas próprias com pelo menos 12 caracteres; não use os usuários de demonstração. O administrador recebe chamados de todos os setores. Os IDs iniciais são Atendimento `1`, Financeiro `2`, Suporte Técnico `3` e Vendas `4`.
+O servidor cria/atualiza as contas configuradas no primeiro início. Em produção, use senhas próprias com pelo menos 12 caracteres; não use os usuários de demonstração. O administrador recebe chamados de todos os setores. Os IDs iniciais são Atendimento `1`, Financeiro `2`, Suporte Técnico `3` e Vendas `4`. Pedidos e Logística e Entregas também são criados automaticamente; seus IDs são sequenciais e podem variar se o banco já tiver outros setores.
 
 Mantenha `SUPABASE_DB_URL`, `ADMIN_PASSWORD` e as senhas em `AGENTS_JSON` somente nas variáveis privadas do ambiente de execução. Não compartilhe nem publique o `.env`, a senha do banco ou uma chave `service_role`; esta integração usa a conexão PostgreSQL diretamente no servidor.
 
@@ -60,7 +61,7 @@ Configure `GEMINI_API_KEY` como variável privada no ambiente do servidor; opcio
 
 A integração envia ao Gemini o nome do setor, as orientações e complemento cadastrados, até as últimas 20 mensagens da conversa e, no setor de Vendas, o catálogo de demonstração. Nome, telefone e outros campos do cadastro não são enviados pela integração. Antes de ativar, revise as políticas internas de privacidade e o tratamento de dados aplicável à empresa. Não coloque credenciais, dados pessoais ou informações confidenciais nas orientações do setor. No Supabase, as configurações e os produtos de demonstração são aplicados automaticamente na inicialização.
 
-O catálogo inicial de Vendas contém produtos e preços fictícios para teste. Não use esses valores como preços ou disponibilidade reais.
+O catálogo inicial de Vendas contém arroz, feijão, óleo, leite e açúcar com preços e estoques inteiramente fictícios. Os itens aparecem identificados como demonstração para a IA; não use os dados como preços, estoque ou disponibilidade reais. Ao aplicar uma atualização do sistema, os antigos itens eletrônicos de demonstração são desativados sem apagar os registros.
 
 ## Usuário de demonstração local
 
@@ -69,10 +70,14 @@ O catálogo inicial de Vendas contém produtos e preços fictícios para teste. 
 - Financeiro: `financeiro@empresa.com` / `financeiro123`
 - Suporte Técnico: `suporte@empresa.com` / `suporte12345`
 - Vendas: `vendas@empresa.com` / `vendas12345`
+- Pedidos: `pedidos@empresa.com` / `pedidos12345`
+- Logística e Entregas: `logistica@empresa.com` / `logistica12345`
 
 Essas credenciais são somente para desenvolvimento local. Em produção, configure `ADMIN_EMAIL` e `ADMIN_PASSWORD` com valores próprios e uma senha de pelo menos 12 caracteres. O painel usa uma sessão protegida por cookie; as rotas dos atendimentos e o chat exigem autenticação.
 
-Na página inicial, o colaborador abre um chamado com nome, cargo, telefone e setor; durante a conversa, também pode encerrá-la ou transferi-la para um atendente de outro setor, com presença online/offline. No painel, um administrador pode criar setores e cadastrar atendentes, vinculando cada atendente a um setor. As senhas cadastradas pelo painel precisam ter pelo menos 12 caracteres e são armazenadas com bcrypt. O atendente recebe avisos na tela e no navegador, pode responder por um atalho, assumir chamados da fila, conversar com o colaborador e transferir chamados para outro setor. As conversas mantêm o histórico ao serem transferidas.
+Na página inicial, o cliente ou parceiro abre um atendimento com nome, cargo ou empresa, telefone e setor; durante a conversa, também pode encerrá-la ou transferi-la para um atendente de outro setor, com presença online/offline. No painel, um administrador pode criar setores e cadastrar atendentes, vinculando cada atendente a um setor. As senhas cadastradas pelo painel precisam ter pelo menos 12 caracteres e são armazenadas com bcrypt. O atendente recebe avisos na tela e no navegador, pode responder por um atalho, assumir chamados da fila, conversar com o cliente e transferir para outro setor. As conversas mantêm o histórico ao serem transferidas.
+
+Execute `npm test` para rodar os testes automatizados. Mantenha `ADMIN_PASSWORD` vazio no `.env` local somente se quiser usar a senha de demonstração documentada; em produção, configure uma senha exclusiva com pelo menos 12 caracteres.
 
 Para configurar os atendentes do modo em memória, defina `AGENTS_JSON` como uma lista JSON de objetos com `name`, `email`, `password` e `departmentId`. Em produção, não há atendentes de demonstração e a senha de cada atendente precisa ter pelo menos 12 caracteres. Por exemplo:
 
@@ -95,7 +100,7 @@ O sistema estará disponível em:
 
 ## Publicar no Render
 
-Crie um serviço **Web Service** ligado ao repositório do projeto, usando runtime Node, comando de build `npm ci` e comando de início `npm start`. Para manter chamados e mensagens após reinícios, configure `NODE_ENV=production`, `STORAGE=supabase`, `SUPABASE_DB_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` e `AGENTS_JSON` nas variáveis privadas do Render. `ADMIN_PASSWORD` e as senhas dos atendentes precisam ter pelo menos 12 caracteres. Se estiver usando o Supabase, crie o schema antes do primeiro deploy. Não use as contas de demonstração em produção.
+Crie um serviço **Web Service** ligado ao repositório do projeto, usando runtime Node, comando de build `npm ci && npm run build` e comando de início `npm start`. Para manter chamados e mensagens após reinícios, configure `NODE_ENV=production`, `STORAGE=supabase`, `SUPABASE_DB_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` e `AGENTS_JSON` nas variáveis privadas do Render. `ADMIN_PASSWORD` e as senhas dos atendentes precisam ter pelo menos 12 caracteres. Se estiver usando o Supabase, crie o schema antes do primeiro deploy. Não use as contas de demonstração em produção.
 
 Não envie o arquivo local `.env` nem a pasta `node_modules` ao repositório. Após o deploy, compartilhe o endereço do serviço: a tela do colaborador fica na raiz (`/`) e o painel do atendente em `/admin.html`.
 

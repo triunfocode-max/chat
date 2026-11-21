@@ -331,7 +331,7 @@ app.use(helmet({
     useDefaults: false,
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", 'https://cdn.tailwindcss.com'],
+      scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       connectSrc: ["'self'", 'ws:', 'wss:'],
       imgSrc: ["'self'", 'data:', 'blob:'],

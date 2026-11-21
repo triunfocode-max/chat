@@ -516,7 +516,7 @@ socket.on('ticket:joined', ({ ticketId, status }) => {
   stopCustomerHistoryPolling();
   updateCustomerComposer();
   messageInput.focus();
-  chatNotice.textContent = 'Você está conectado. Pode enviar sua mensagem.';
+  chatNotice.textContent = 'Conexão estabelecida. Nossa equipe já pode atender você.';
   flushPendingMessages();
 });
 

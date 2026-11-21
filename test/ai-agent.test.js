@@ -55,6 +55,8 @@ test('uses database product data and keeps sales handoff for explicit requests o
   assert.match(instructions, /não encaminhe automaticamente uma conversa/i);
   assert.match(instructions, /pedir explicitamente um vendedor/i);
   assert.doesNotMatch(instructions, /encaminhe pedidos de compra a um vendedor/i);
+  assert.match(instructions, /distribuidora de alimentos/i);
+  assert.match(instructions, /estoque representa unidades da embalagem/i);
 });
 
 test('builds a greeting prompt for a new conversation without inventing a customer message', () => {

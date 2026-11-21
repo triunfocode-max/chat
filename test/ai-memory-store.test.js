@@ -63,12 +63,17 @@ test('does not save an AI reply if a customer message arrived while it was gener
 
 test('provides default sector guidance, demo sales products, and bulk AI activation', () => {
   const departmentGuidance = store.listDepartments();
-  assert.equal(departmentGuidance.length >= 4, true);
+  assert.ok(departmentGuidance.some((department) => department.NAME === 'Pedidos'));
+  assert.ok(departmentGuidance.some((department) => department.NAME === 'Logística e Entregas'));
   assert.ok(departmentGuidance.every((department) => department.AI_INSTRUCTIONS.length > 0));
+  if (process.env.NODE_ENV !== 'production' && !process.env.AGENTS_JSON) {
+    assert.ok(store.listAgents().some((agent) => agent.DEPARTMENT_ID === 5));
+    assert.ok(store.listAgents().some((agent) => agent.DEPARTMENT_ID === 6));
+  }
   const salesGuidance = departmentGuidance.find((department) => department.NAME === 'Vendas').AI_INSTRUCTIONS;
   assert.match(salesGuidance, /catálogo do banco de dados/);
-  assert.match(salesGuidance, /somente se o colaborador pedir explicitamente/);
-  assert.ok(store.listProducts().some((product) => product.sku === 'TEST-MON-24'));
+  assert.match(salesGuidance, /somente se o cliente pedir explicitamente/);
+  assert.ok(store.listProducts().some((product) => product.sku === 'TEST-RICE-5KG'));
 
   const enabled = store.updateAllDepartmentAiSettings(true);
   assert.ok(enabled.every((department) => department.AI_ENABLED));

@@ -4,8 +4,10 @@ const path = require('path');
 const { Pool } = require('pg');
 const {
   DEFAULT_DEPARTMENT_GUIDANCE,
+  DEFAULT_ADDITIONAL_DEPARTMENTS,
   DEFAULT_NEW_DEPARTMENT_GUIDANCE,
   LEGACY_DEFAULT_SALES_GUIDANCE,
+  PREVIOUS_DEFAULT_SALES_GUIDANCE,
   TEST_SALES_PRODUCTS
 } = require('./ai-seed-data');
 
@@ -182,11 +184,24 @@ async function initialize() {
     );
   }
 
+  for (const department of DEFAULT_ADDITIONAL_DEPARTMENTS) {
+    await pool.query(
+      `INSERT INTO departments (name, ai_instructions)
+       VALUES ($1, $2)
+       ON CONFLICT (LOWER(name)) DO UPDATE
+       SET ai_instructions = CASE
+         WHEN departments.ai_instructions = '' THEN EXCLUDED.ai_instructions
+         ELSE departments.ai_instructions
+       END`,
+      [department.name, department.instructions]
+    );
+  }
+
   await pool.query(
     `UPDATE departments
      SET ai_instructions = $1
-     WHERE LOWER(BTRIM(name)) = 'vendas' AND ai_instructions = $2`,
-    [DEFAULT_DEPARTMENT_GUIDANCE[4], LEGACY_DEFAULT_SALES_GUIDANCE]
+     WHERE LOWER(BTRIM(name)) = 'vendas' AND ai_instructions = ANY($2::text[])`,
+    [DEFAULT_DEPARTMENT_GUIDANCE[4], [LEGACY_DEFAULT_SALES_GUIDANCE, PREVIOUS_DEFAULT_SALES_GUIDANCE]]
   );
 
   await pool.query(`
@@ -215,6 +230,42 @@ async function initialize() {
       ]
     );
   }
+
+  if (process.env.NODE_ENV !== 'production' && configuredAgents.length === 0) {
+    const additionalDemoAgents = [
+      { name: 'Atendente de Pedidos', email: 'pedidos@empresa.com', password: 'pedidos12345', departmentName: 'Pedidos' },
+      { name: 'Atendente de Logística', email: 'logistica@empresa.com', password: 'logistica12345', departmentName: 'Logística e Entregas' }
+    ];
+
+    for (const agent of additionalDemoAgents) {
+      const departmentResult = await pool.query(
+        'SELECT id FROM departments WHERE LOWER(BTRIM(name)) = LOWER($1)',
+        [agent.departmentName]
+      );
+      const departmentId = departmentResult.rows[0]?.id;
+      if (!departmentId) {
+        throw new Error(`Setor de demonstração não encontrado: ${agent.departmentName}.`);
+      }
+
+      const passwordHash = await bcrypt.hash(agent.password, 10);
+      await pool.query(
+        `INSERT INTO agents (name, email, password_hash, department_id, is_admin)
+         VALUES ($1, $2, $3, $4, FALSE)
+         ON CONFLICT (email) DO UPDATE
+         SET name = EXCLUDED.name,
+             password_hash = EXCLUDED.password_hash,
+             department_id = EXCLUDED.department_id,
+             is_admin = FALSE`,
+        [agent.name, agent.email, passwordHash, departmentId]
+      );
+    }
+  }
+
+  await pool.query(
+    `UPDATE products SET active = FALSE
+     WHERE sku = ANY($1::text[])`,
+    [['TEST-MON-24', 'TEST-ERG-01', 'TEST-TEC-01', 'TEST-KIT-01']]
+  );
 
   for (const product of TEST_SALES_PRODUCTS) {
     await pool.query(

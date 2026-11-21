@@ -102,12 +102,22 @@ INSERT INTO departments (id, name) VALUES
     (4, 'Vendas')
 ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO departments (name, ai_instructions) VALUES
+    ('Pedidos', 'Atenda solicitações sobre pedidos com cordialidade. Peça o número do pedido e os detalhes essenciais para localizar o caso, mas não informe status, itens, valores ou prazos sem dados confirmados. Não registre nem confirme alterações de pedido; encaminhe para um atendente quando for necessária consulta ou decisão humana.'),
+    ('Logística e Entregas', 'Atenda dúvidas sobre logística e entregas com cordialidade. Peça o número do pedido e a cidade quando isso ajudar a localizar a solicitação. Não invente rotas, rastreamento, disponibilidade ou prazos de entrega; encaminhe para a equipe de logística quando não houver informação confirmada.')
+ON CONFLICT (LOWER(name)) DO UPDATE
+SET ai_instructions = CASE
+    WHEN departments.ai_instructions = '' THEN EXCLUDED.ai_instructions
+    ELSE departments.ai_instructions
+END;
+
 UPDATE departments
-SET ai_instructions = 'Atenda primeiro as dúvidas de vendas consultando os produtos ativos no catálogo do banco de dados (nome, descrição, preço e estoque). Ajude a comparar itens e continue o atendimento mesmo quando o colaborador demonstrar intenção de compra. Não invente produtos, descontos, prazos ou disponibilidade, nem confirme ou registre pedidos. Transfira para um vendedor somente se o colaborador pedir explicitamente ou se a informação necessária não estiver no catálogo e você não puder responder com segurança.'
+SET ai_instructions = 'Atenda clientes de uma distribuidora de alimentos consultando os produtos ativos no catálogo do banco de dados. Informe apenas nome, embalagem, preço e estoque que estiverem cadastrados. Considere o estoque em unidades da embalagem descrita; não converta para caixas ou fardos. Confirme a quantidade desejada quando necessário. Não invente marcas, preços, descontos, pedido mínimo, validade, disponibilidade ou prazo de entrega; não confirme nem registre pedidos. Transfira para um vendedor somente se o cliente pedir explicitamente ou se a informação necessária não estiver no catálogo e você não puder responder com segurança.'
 WHERE LOWER(BTRIM(name)) = 'vendas'
   AND (
       ai_instructions = ''
       OR ai_instructions = 'Ajude com informações dos produtos de teste cadastrados no catálogo. Informe preços e estoque somente conforme o catálogo e identifique-os como dados de demonstração. Não invente produtos, descontos, prazos ou disponibilidade; encaminhe pedidos de compra e dúvidas fora do catálogo para um vendedor.'
+      OR ai_instructions = 'Atenda primeiro as dúvidas de vendas consultando os produtos ativos no catálogo do banco de dados (nome, descrição, preço e estoque). Ajude a comparar itens e continue o atendimento mesmo quando o colaborador demonstrar intenção de compra. Não invente produtos, descontos, prazos ou disponibilidade, nem confirme ou registre pedidos. Transfira para um vendedor somente se o colaborador pedir explicitamente ou se a informação necessária não estiver no catálogo e você não puder responder com segurança.'
   );
 
 SELECT setval(
@@ -118,10 +128,15 @@ SELECT setval(
 CREATE INDEX IF NOT EXISTS idx_customers_phone_normalized ON customers (LOWER(BTRIM(phone)));
 CREATE INDEX IF NOT EXISTS idx_agents_email_normalized ON agents (LOWER(BTRIM(email)));
 
+UPDATE products
+SET active = FALSE
+WHERE sku IN ('TEST-MON-24', 'TEST-ERG-01', 'TEST-TEC-01', 'TEST-KIT-01');
+
 INSERT INTO products (sku, name, description, price, stock, active) VALUES
-    ('TEST-MON-24', 'Monitor Vista 24', 'Monitor de demonstração de 24 polegadas, resolução Full HD e conexão HDMI.', 799.90, 8, TRUE),
-    ('TEST-ERG-01', 'Cadeira Ergo Fit', 'Cadeira de escritório de demonstração com altura ajustável e apoio lombar.', 649.50, 5, TRUE),
-    ('TEST-TEC-01', 'Teclado Compacto', 'Teclado USB compacto de demonstração com layout ABNT2.', 89.90, 20, TRUE),
-    ('TEST-KIT-01', 'Kit Escritório Start', 'Kit de demonstração com teclado compacto, mouse USB e mousepad.', 129.90, 12, TRUE)
+    ('TEST-RICE-5KG', 'Arroz tipo 1 5 kg', 'Pacote de demonstração de arroz tipo 1, peso líquido de 5 kg.', 29.90, 120, TRUE),
+    ('TEST-BEAN-1KG', 'Feijão carioca 1 kg', 'Pacote de demonstração de feijão carioca tipo 1, peso líquido de 1 kg.', 8.90, 240, TRUE),
+    ('TEST-OIL-900ML', 'Óleo de soja 900 ml', 'Garrafa de demonstração de óleo de soja, conteúdo de 900 ml.', 6.50, 180, TRUE),
+    ('TEST-MILK-1L', 'Leite UHT integral 1 L', 'Unidade de demonstração de leite UHT integral, embalagem de 1 litro.', 5.20, 96, TRUE),
+    ('TEST-SUGAR-5KG', 'Açúcar cristal 5 kg', 'Pacote de demonstração de açúcar cristal, peso líquido de 5 kg.', 19.90, 72, TRUE)
 ON CONFLICT (sku) DO NOTHING;
 

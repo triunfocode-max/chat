@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const {
   DEFAULT_DEPARTMENT_GUIDANCE,
+  DEFAULT_ADDITIONAL_DEPARTMENTS,
   DEFAULT_NEW_DEPARTMENT_GUIDANCE,
   TEST_SALES_PRODUCTS
 } = require('./ai-seed-data');
@@ -13,7 +14,14 @@ const departments = [
   { ID: 1, NAME: 'Atendimento', AI_ENABLED: false, AI_INSTRUCTIONS: DEFAULT_DEPARTMENT_GUIDANCE[1], AI_ADDITIONAL_CONTEXT: '' },
   { ID: 2, NAME: 'Financeiro', AI_ENABLED: false, AI_INSTRUCTIONS: DEFAULT_DEPARTMENT_GUIDANCE[2], AI_ADDITIONAL_CONTEXT: '' },
   { ID: 3, NAME: 'Suporte Técnico', AI_ENABLED: false, AI_INSTRUCTIONS: DEFAULT_DEPARTMENT_GUIDANCE[3], AI_ADDITIONAL_CONTEXT: '' },
-  { ID: 4, NAME: 'Vendas', AI_ENABLED: false, AI_INSTRUCTIONS: DEFAULT_DEPARTMENT_GUIDANCE[4], AI_ADDITIONAL_CONTEXT: '' }
+  { ID: 4, NAME: 'Vendas', AI_ENABLED: false, AI_INSTRUCTIONS: DEFAULT_DEPARTMENT_GUIDANCE[4], AI_ADDITIONAL_CONTEXT: '' },
+  ...DEFAULT_ADDITIONAL_DEPARTMENTS.map((department, index) => ({
+    ID: index + 5,
+    NAME: department.name,
+    AI_ENABLED: false,
+    AI_INSTRUCTIONS: department.instructions,
+    AI_ADDITIONAL_CONTEXT: ''
+  }))
 ];
 const defaultAgent = { 
   ID: 1,
@@ -34,7 +42,9 @@ const demoAgents = process.env.NODE_ENV === 'production' || configuredAgents.len
   : [
     { name: 'Atendente Financeiro', email: 'financeiro@empresa.com', password: 'financeiro123', departmentId: 2 },
     { name: 'Atendente Suporte', email: 'suporte@empresa.com', password: 'suporte12345', departmentId: 3 },
-    { name: 'Atendente Vendas', email: 'vendas@empresa.com', password: 'vendas12345', departmentId: 4 }
+    { name: 'Atendente Vendas', email: 'vendas@empresa.com', password: 'vendas12345', departmentId: 4 },
+    { name: 'Atendente de Pedidos', email: 'pedidos@empresa.com', password: 'pedidos12345', departmentId: 5 },
+    { name: 'Atendente de Logística', email: 'logistica@empresa.com', password: 'logistica12345', departmentId: 6 }
   ];
 
 const agents = [defaultAgent, ...[...demoAgents, ...configuredAgents].map((agent, index) => {
@@ -68,7 +78,7 @@ const customers = [];
 const tickets = [];
 const messages = [];
 
-let nextDepartmentId = 5;
+let nextDepartmentId = departments.length + 1;
 let nextAgentId = agents.length + 1;
 let nextCustomerId = 1;
 let nextTicketId = 1;
