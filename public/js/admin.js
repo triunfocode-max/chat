@@ -35,6 +35,16 @@ const quickReplyMessage = document.getElementById('quickReplyMessage');
 const quickReplyError = document.getElementById('quickReplyError');
 const sendQuickReply = document.getElementById('sendQuickReply');
 const aiSettingsButton = document.getElementById('aiSettingsButton');
+const manageTeamButton = document.getElementById('manageTeamButton');
+const manageTeamDialog = document.getElementById('manageTeamDialog');
+const createDepartmentForm = document.getElementById('createDepartmentForm');
+const newDepartmentName = document.getElementById('newDepartmentName');
+const departmentFormStatus = document.getElementById('departmentFormStatus');
+const createDepartmentButton = document.getElementById('createDepartmentButton');
+const createAgentForm = document.getElementById('createAgentForm');
+const newAgentDepartment = document.getElementById('newAgentDepartment');
+const agentFormStatus = document.getElementById('agentFormStatus');
+const createAgentButton = document.getElementById('createAgentButton');
 const aiSettingsDialog = document.getElementById('aiSettingsDialog');
 const aiDepartmentSelect = document.getElementById('aiDepartmentSelect');
 const aiEnabledInput = document.getElementById('aiEnabledInput');
@@ -345,6 +355,8 @@ async function loadDashboard() {
       closed: data.closed || []
     };
     currentAgent.isAdmin = Boolean(data.isAdmin);
+    manageTeamButton.classList.toggle('hidden', !currentAgent.isAdmin);
+    aiSettingsButton.classList.toggle('hidden', !currentAgent.isAdmin);
     document.getElementById('agentDepartment').textContent = data.departmentName || 'Setor';
     document.getElementById('agentName').textContent = currentAgent.name;
     if (selectedTicket) {
@@ -422,6 +434,39 @@ function closeAiSettings() {
   aiSettingsDialog.classList.remove('flex');
 }
 
+function showManagementStatus(element, message, isError = false) {
+  element.textContent = message;
+  element.className = `rounded-lg px-3 py-2 text-sm ${isError ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`;
+}
+
+function updateAgentDepartmentOptions() {
+  newAgentDepartment.replaceChildren(new Option('Selecione o setor', ''));
+  departments.forEach((department) => {
+    newAgentDepartment.add(new Option(department.NAME, department.ID));
+  });
+}
+
+async function openManageTeam() {
+  departmentFormStatus.classList.add('hidden');
+  agentFormStatus.classList.add('hidden');
+  try {
+    const response = await fetch('/api/departments');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Não foi possível carregar os setores.');
+    departments = data;
+    updateAgentDepartmentOptions();
+    manageTeamDialog.classList.remove('hidden');
+    manageTeamDialog.classList.add('flex');
+  } catch (error) {
+    window.alert(error.message);
+  }
+}
+
+function closeManageTeam() {
+  manageTeamDialog.classList.add('hidden');
+  manageTeamDialog.classList.remove('flex');
+}
+
 document.querySelectorAll('.filterButton').forEach((button) => {
   button.addEventListener('click', () => {
     activeFilter = button.dataset.filter;
@@ -451,6 +496,7 @@ loginForm.addEventListener('submit', async (event) => {
 
     currentAgent = data.agent;
     aiSettingsButton.classList.toggle('hidden', !currentAgent.isAdmin);
+    manageTeamButton.classList.toggle('hidden', !currentAgent.isAdmin);
     if ('Notification' in window && Notification.permission === 'default') {
       await Notification.requestPermission();
     }
@@ -475,6 +521,60 @@ notificationButton.addEventListener('click', () => {
 });
 
 aiSettingsButton.addEventListener('click', openAiSettings);
+manageTeamButton.addEventListener('click', openManageTeam);
+document.getElementById('closeManageTeam').addEventListener('click', closeManageTeam);
+document.getElementById('doneManageTeam').addEventListener('click', closeManageTeam);
+createDepartmentForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  createDepartmentButton.disabled = true;
+  departmentFormStatus.classList.add('hidden');
+  try {
+    const response = await fetch('/api/departments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newDepartmentName.value })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Não foi possível cadastrar o setor.');
+    departments = await fetch('/api/departments').then((result) => result.json());
+    updateAgentDepartmentOptions();
+    newAgentDepartment.value = String(data.department.id);
+    showManagementStatus(
+      departmentFormStatus,
+      data.created ? `Setor "${data.department.name}" adicionado.` : `O setor "${data.department.name}" já existe.`
+    );
+    if (data.created) newDepartmentName.value = '';
+  } catch (error) {
+    showManagementStatus(departmentFormStatus, error.message, true);
+  } finally {
+    createDepartmentButton.disabled = false;
+  }
+});
+createAgentForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  createAgentButton.disabled = true;
+  agentFormStatus.classList.add('hidden');
+  try {
+    const response = await fetch('/api/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: document.getElementById('newAgentName').value,
+        email: document.getElementById('newAgentEmail').value,
+        password: document.getElementById('newAgentPassword').value,
+        departmentId: Number(newAgentDepartment.value)
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Não foi possível cadastrar o atendente.');
+    showManagementStatus(agentFormStatus, `Atendente "${data.agent.NAME}" cadastrado no setor escolhido.`);
+    createAgentForm.reset();
+  } catch (error) {
+    showManagementStatus(agentFormStatus, error.message, true);
+  } finally {
+    createAgentButton.disabled = false;
+  }
+});
 aiDepartmentSelect.addEventListener('change', renderAiDepartmentSettings);
 aiEnabledInput.addEventListener('change', () => {
   if (aiEnabledInput.checked && !aiSettingsConfigured) {

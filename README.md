@@ -72,7 +72,7 @@ O catálogo inicial de Vendas contém produtos e preços fictícios para teste. 
 
 Essas credenciais são somente para desenvolvimento local. Em produção, configure `ADMIN_EMAIL` e `ADMIN_PASSWORD` com valores próprios e uma senha de pelo menos 12 caracteres. O painel usa uma sessão protegida por cookie; as rotas dos atendimentos e o chat exigem autenticação.
 
-Na página inicial, o colaborador abre um chamado com nome, cargo, telefone e setor; durante a conversa, também pode encerrá-la ou transferi-la para um atendente de outro setor, com presença online/offline. O atendente recebe avisos na tela e no navegador, pode responder por um atalho, assumir chamados da fila, conversar com o colaborador e transferir chamados para outro setor. As conversas mantêm o histórico ao serem transferidas.
+Na página inicial, o colaborador abre um chamado com nome, cargo, telefone e setor; durante a conversa, também pode encerrá-la ou transferi-la para um atendente de outro setor, com presença online/offline. No painel, um administrador pode criar setores e cadastrar atendentes, vinculando cada atendente a um setor. As senhas cadastradas pelo painel precisam ter pelo menos 12 caracteres e são armazenadas com bcrypt. O atendente recebe avisos na tela e no navegador, pode responder por um atalho, assumir chamados da fila, conversar com o colaborador e transferir chamados para outro setor. As conversas mantêm o histórico ao serem transferidas.
 
 Para configurar os atendentes do modo em memória, defina `AGENTS_JSON` como uma lista JSON de objetos com `name`, `email`, `password` e `departmentId`. Em produção, não há atendentes de demonstração e a senha de cada atendente precisa ter pelo menos 12 caracteres. Por exemplo:
 

@@ -244,6 +244,18 @@ async function createDepartment(name) {
   };
 }
 
+async function createAgent({ name, email, password, departmentId }) {
+  const passwordHash = await bcrypt.hash(password, 10);
+  const result = await pool.query(
+    `INSERT INTO agents (name, email, password_hash, department_id, is_admin)
+     VALUES ($1, $2, $3, $4, FALSE)
+     ON CONFLICT DO NOTHING
+     RETURNING id AS "ID", name AS "NAME", department_id AS "DEPARTMENT_ID"`,
+    [name, email, passwordHash, departmentId]
+  );
+  return normalizeRows(result.rows)[0] || null;
+}
+
 async function updateDepartmentAiSettings(departmentId, { enabled, instructions, additionalContext }) {
   const result = await pool.query(
     `UPDATE departments
@@ -520,6 +532,7 @@ module.exports = {
     return normalizeRows(result.rows);
   },
   createDepartment,
+  createAgent,
   updateDepartmentAiSettings,
   updateAllDepartmentAiSettings,
   listProducts,

@@ -35,7 +35,7 @@ function safeErrorDetail(error) {
 
 function requireAdmin(req, res, next) {
   if (!req.agent.IS_ADMIN) {
-    return res.status(403).json({ message: 'Somente administradores podem configurar a IA.' });
+    return res.status(403).json({ message: 'Somente administradores podem executar esta ação.' });
   }
   return next();
 }
@@ -467,22 +467,61 @@ app.post('/api/departments/:id/ai', requireAgent, requireAdmin, async (req, res)
   }
 });
 
-app.post('/api/departments', requireAgent, async (req, res) => {
+app.post('/api/departments', requireAgent, requireAdmin, async (req, res) => {
   try {
-    const name = String(req.body.name || '').trim();
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
 
-    if (!name) {
-      return res.status(400).json({ message: 'Nome do setor/departamento é obrigatório.' });
+    if (!name || name.length > 150) {
+      return res.status(400).json({ message: 'Informe um nome de setor com até 150 caracteres.' });
     }
 
     const result = await store.createDepartment(name);
 
     return res.status(result.created ? 201 : 200).json({
       success: true,
-      department: result.department
+      department: result.department,
+      created: result.created
     });
   } catch (error) {
     return sendServerError(res, error, 'Falha ao cadastrar setor', 'Não foi possível cadastrar o setor.');
+  }
+});
+
+app.post('/api/agents', requireAgent, requireAdmin, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body
+      : {};
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+    const departmentId = Number(body.departmentId);
+
+    if (
+      !name || name.length > 150
+      || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      || password.length < 12 || password.length > 200
+      || !Number.isSafeInteger(departmentId) || departmentId < 1
+    ) {
+      return res.status(400).json({
+        message: 'Informe nome, e-mail válido, senha com pelo menos 12 caracteres e setor.'
+      });
+    }
+
+    const departmentExists = (await store.listDepartments())
+      .some((department) => Number(department.ID) === departmentId);
+    if (!departmentExists) {
+      return res.status(400).json({ message: 'O setor selecionado não existe.' });
+    }
+
+    const agent = await store.createAgent({ name, email, password, departmentId });
+    if (!agent) {
+      return res.status(409).json({ message: 'Já existe um atendente cadastrado com este e-mail.' });
+    }
+
+    return res.status(201).json({ success: true, agent });
+  } catch (error) {
+    return sendServerError(res, error, 'Falha ao cadastrar atendente', 'Não foi possível cadastrar o atendente.');
   }
 });
 

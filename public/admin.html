@@ -41,6 +41,7 @@
       <header class="brand-gradient flex h-16 items-center justify-between px-4 text-white md:px-6">
         <a href="/" class="flex items-center gap-2 font-bold"><span class="grid h-9 w-9 place-items-center rounded-xl bg-white/15 text-lg">M</span>MultiAtende</a>
         <div class="flex items-center gap-3">
+          <button id="manageTeamButton" type="button" class="hidden rounded-lg border border-white/25 px-3 py-2 text-sm hover:bg-white/10">Setores e atendentes</button>
           <button id="aiSettingsButton" type="button" class="hidden rounded-lg border border-white/25 px-3 py-2 text-sm hover:bg-white/10">Configurar IA</button>
           <button id="notificationButton" type="button" class="relative grid h-10 w-10 place-items-center rounded-full text-xl hover:bg-white/10" aria-label="Notificações">
             ♧
@@ -133,6 +134,52 @@
     </div>
 
     <div id="toastContainer" class="fixed bottom-4 right-4 z-20 flex w-[min(92vw,360px)] flex-col gap-2"></div>
+    <div id="manageTeamDialog" class="fixed inset-0 z-30 hidden items-center justify-center overflow-y-auto bg-slate-900/40 p-4">
+      <section class="my-auto w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
+        <div class="flex items-start justify-between">
+          <div>
+            <h2 class="text-lg font-bold">Gerenciar setores e atendentes</h2>
+            <p class="mt-1 text-sm text-slate-500">Cadastre setores e vincule cada atendente a um único setor.</p>
+          </div>
+          <button id="closeManageTeam" type="button" class="rounded-lg px-2 py-1 text-xl text-slate-400 hover:bg-slate-100" aria-label="Fechar">×</button>
+        </div>
+        <div class="mt-5 grid gap-6 md:grid-cols-2">
+          <form id="createDepartmentForm" class="space-y-3 rounded-xl border border-slate-200 p-4">
+            <h3 class="font-semibold">Adicionar setor</h3>
+            <label class="block">
+              <span class="mb-1.5 block text-sm font-medium">Nome do setor</span>
+              <input id="newDepartmentName" type="text" maxlength="150" required class="w-full rounded-xl border border-slate-300 px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100" placeholder="Ex.: Recursos Humanos" />
+            </label>
+            <p id="departmentFormStatus" class="hidden rounded-lg px-3 py-2 text-sm"></p>
+            <button id="createDepartmentButton" type="submit" class="rounded-xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-50">Adicionar setor</button>
+          </form>
+          <form id="createAgentForm" class="space-y-3 rounded-xl border border-slate-200 p-4">
+            <h3 class="font-semibold">Cadastrar atendente</h3>
+            <label class="block">
+              <span class="mb-1.5 block text-sm font-medium">Nome</span>
+              <input id="newAgentName" type="text" maxlength="150" required class="w-full rounded-xl border border-slate-300 px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100" autocomplete="name" />
+            </label>
+            <label class="block">
+              <span class="mb-1.5 block text-sm font-medium">E-mail</span>
+              <input id="newAgentEmail" type="email" maxlength="254" required class="w-full rounded-xl border border-slate-300 px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100" autocomplete="email" />
+            </label>
+            <label class="block">
+              <span class="mb-1.5 block text-sm font-medium">Senha (mínimo 12 caracteres)</span>
+              <input id="newAgentPassword" type="password" minlength="12" maxlength="200" required class="w-full rounded-xl border border-slate-300 px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100" autocomplete="new-password" />
+            </label>
+            <label class="block">
+              <span class="mb-1.5 block text-sm font-medium">Setor</span>
+              <select id="newAgentDepartment" required class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100"></select>
+            </label>
+            <p id="agentFormStatus" class="hidden rounded-lg px-3 py-2 text-sm"></p>
+            <button id="createAgentButton" type="submit" class="rounded-xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-50">Cadastrar atendente</button>
+          </form>
+        </div>
+        <div class="mt-5 flex justify-end">
+          <button id="doneManageTeam" type="button" class="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">Concluir</button>
+        </div>
+      </section>
+    </div>
     <div id="aiSettingsDialog" class="fixed inset-0 z-30 hidden items-center justify-center bg-slate-900/40 p-4">
       <section class="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
         <div class="flex items-start justify-between">

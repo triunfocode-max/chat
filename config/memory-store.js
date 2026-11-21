@@ -69,6 +69,7 @@ const tickets = [];
 const messages = [];
 
 let nextDepartmentId = 5;
+let nextAgentId = agents.length + 1;
 let nextCustomerId = 1;
 let nextTicketId = 1;
 let nextMessageId = 1;
@@ -90,6 +91,26 @@ function createDepartment(name) {
   departments.push(department);
 
   return { department: { id: department.ID, name: department.NAME }, created: true };
+}
+
+function createAgent({ name, email, password, departmentId }) {
+  if (!departments.some((department) => department.ID === departmentId)) {
+    throw new Error('Departamento não encontrado.');
+  }
+  if (agents.some((agent) => agent.EMAIL.toLowerCase() === email.toLowerCase())) {
+    return null;
+  }
+
+  const agent = {
+    ID: nextAgentId++,
+    NAME: name,
+    EMAIL: email,
+    PASSWORD_HASH: bcrypt.hashSync(password, 10),
+    DEPARTMENT_ID: departmentId,
+    IS_ADMIN: false
+  };
+  agents.push(agent);
+  return { ID: agent.ID, NAME: agent.NAME, DEPARTMENT_ID: agent.DEPARTMENT_ID };
 }
 
 function updateDepartmentAiSettings(departmentId, { enabled, instructions, additionalContext }) {
@@ -315,6 +336,7 @@ function getTicketAccess(ticketId) {
 module.exports = {
   listDepartments,
   createDepartment,
+  createAgent,
   updateDepartmentAiSettings,
   updateAllDepartmentAiSettings,
   listProducts,
