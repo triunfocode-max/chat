@@ -27,17 +27,8 @@ const ticketAccessTokens = new Map();
 const onlineAgents = new Map();
 const aiReplyQueues = new Map();
 const messageDeliveryCache = new Map();
-const SAFE_ERROR_MESSAGES = new Set([
-  'DATA_ENCRYPTION_KEY deve ser uma chave Base64 válida de 32 bytes.',
-  'Formato de dado criptografado inválido.',
-  'Parâmetros criptográficos inválidos.',
-  'Não foi possível descriptografar os dados. Verifique a chave de criptografia.'
-]);
 
 function safeErrorDetail(error) {
-  if (SAFE_ERROR_MESSAGES.has(error?.message)) {
-    return error.message;
-  }
   return error?.code || error?.name || 'erro interno';
 }
 

@@ -2,11 +2,6 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
-const {
-  createBlindIndex,
-  decryptField,
-  encryptField
-} = require('./field-crypto');
 
 const databaseUrl = process.env.SUPABASE_DB_URL;
 
@@ -110,85 +105,7 @@ function normalizeRows(rows = []) {
   }, {}));
 }
 
-async function encryptExistingData() {
-  const customers = await pool.query(
-    `SELECT id, full_name, role_job, phone, phone_lookup_hash
-     FROM customers
-     ORDER BY id`
-  );
-  for (const customer of customers.rows) {
-    const phone = decryptField(customer.phone);
-    const phoneLookupHash = createBlindIndex('customer-phone', phone);
-    if (
-      [customer.full_name, customer.role_job, customer.phone]
-        .every((value) => value === null || String(value).startsWith('enc:v1:'))
-      && customer.phone_lookup_hash === phoneLookupHash
-    ) {
-      continue;
-    }
-
-    await pool.query(
-      `UPDATE customers
-       SET full_name = $2, role_job = $3, phone = $4, phone_lookup_hash = $5
-       WHERE id = $1`,
-      [
-        customer.id,
-        encryptField(customer.full_name),
-        encryptField(customer.role_job),
-        encryptField(customer.phone),
-        phoneLookupHash
-      ]
-    );
-  }
-
-  const agents = await pool.query(
-    `SELECT id, name, email, email_lookup_hash
-     FROM agents
-     ORDER BY id`
-  );
-  for (const agent of agents.rows) {
-    const email = decryptField(agent.email).trim().toLowerCase();
-    const emailLookupHash = createBlindIndex('agent-email', email);
-    if (
-      String(agent.name).startsWith('enc:v1:')
-      && String(agent.email).startsWith('enc:v1:')
-      && agent.email_lookup_hash === emailLookupHash
-    ) {
-      continue;
-    }
-
-    await pool.query(
-      `UPDATE agents
-       SET name = $2, email = $3, email_lookup_hash = $4
-       WHERE id = $1`,
-      [
-        agent.id,
-        encryptField(agent.name),
-        encryptField(agent.email),
-        emailLookupHash
-      ]
-    );
-  }  
-
-  const messages = await pool.query(
-    `SELECT id, message_text
-     FROM messages
-     ORDER BY id`
-  );
-  for (const message of messages.rows) {
-    if (String(message.message_text).startsWith('enc:v1:')) {
-      decryptField(message.message_text);
-      continue;
-    }
-    await pool.query(
-      'UPDATE messages SET message_text = $2 WHERE id = $1',
-      [message.id, encryptField(message.message_text)]
-    );
-  }
-}
-
 async function initialize() {
-  createBlindIndex('key-check', 'initialized');
   await pool.query(`
     ALTER TABLE departments
       ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN NOT NULL DEFAULT FALSE,
@@ -202,14 +119,12 @@ async function initialize() {
     ALTER TABLE customers
       ALTER COLUMN full_name TYPE TEXT,
       ALTER COLUMN role_job TYPE TEXT,
-      ALTER COLUMN phone TYPE TEXT,
-      ADD COLUMN IF NOT EXISTS phone_lookup_hash VARCHAR(64)
+      ALTER COLUMN phone TYPE TEXT
   `);
   await pool.query(`
     ALTER TABLE agents
       ALTER COLUMN name TYPE TEXT,
-      ALTER COLUMN email TYPE TEXT,
-      ADD COLUMN IF NOT EXISTS email_lookup_hash VARCHAR(64)
+      ALTER COLUMN email TYPE TEXT
   `);
   await pool.query(`
     ALTER TABLE messages
@@ -218,7 +133,6 @@ async function initialize() {
       ADD COLUMN IF NOT EXISTS attachment_data TEXT,
       ALTER COLUMN message_text SET DEFAULT ''
   `);
-  await encryptExistingData();
   await pool.query('ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_sender_type_check');
   await pool.query(`
     ALTER TABLE messages
@@ -226,13 +140,10 @@ async function initialize() {
       CHECK (sender_type IN ('CUSTOMER', 'AGENT', 'BOT'))
   `);
   await pool.query(
-    'CREATE INDEX IF NOT EXISTS idx_customers_phone_lookup_hash ON customers (phone_lookup_hash)'
+    'CREATE INDEX IF NOT EXISTS idx_customers_phone_normalized ON customers (LOWER(BTRIM(phone)))'
   );
-  await pool.query('DROP INDEX IF EXISTS idx_customers_phone');
   await pool.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_email_lookup_hash
-     ON agents (email_lookup_hash)
-     WHERE email_lookup_hash IS NOT NULL`
+    'CREATE INDEX IF NOT EXISTS idx_agents_email_normalized ON agents (LOWER(BTRIM(email)))'
   );
 
   for (const department of departments) {
@@ -252,18 +163,16 @@ async function initialize() {
   for (const agent of agentsToSeed) {
     const passwordHash = await bcrypt.hash(agent.password, 10);
     await pool.query(
-      `INSERT INTO agents (name, email, email_lookup_hash, password_hash, department_id, is_admin)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (email_lookup_hash) WHERE email_lookup_hash IS NOT NULL DO UPDATE
+      `INSERT INTO agents (name, email, password_hash, department_id, is_admin)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (email) DO UPDATE
        SET name = EXCLUDED.name,
-           email = EXCLUDED.email,
            password_hash = EXCLUDED.password_hash,
            department_id = EXCLUDED.department_id,
            is_admin = EXCLUDED.is_admin`,
       [
-        encryptField(agent.name),
-        encryptField(agent.email.toLowerCase()),
-        createBlindIndex('agent-email', agent.email),
+        agent.name,
+        agent.email.toLowerCase(),
         passwordHash,
         agent.departmentId,
         agent.isAdmin
@@ -307,27 +216,21 @@ async function registerCustomer({ fullName, roleJob, phone, departmentId, access
 
   try {
     await client.query('BEGIN');
-    const phoneLookupHash = createBlindIndex('customer-phone', phone);
     let customerResult = await client.query(
       `SELECT id AS "ID" FROM customers
-       WHERE phone_lookup_hash = $1
+       WHERE LOWER(BTRIM(phone)) = LOWER(BTRIM($1))
        ORDER BY id
        LIMIT 1`,
-      [phoneLookupHash]
+      [phone]
     );
     let customerId = customerResult.rows[0]?.ID;
 
     if (!customerId) {
       customerResult = await client.query(
-        `INSERT INTO customers (full_name, role_job, phone, phone_lookup_hash)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO customers (full_name, role_job, phone)
+         VALUES ($1, $2, $3)
          RETURNING id AS "ID"`,
-        [
-          encryptField(fullName),
-          encryptField(roleJob),
-          encryptField(phone),
-          phoneLookupHash
-        ]
+        [fullName, roleJob, phone]
       );
       customerId = customerResult.rows[0].ID;
     }
@@ -370,12 +273,7 @@ async function getDashboard(agentId, departmentId, isAdmin = false) {
     WHERE ${where}
     ORDER BY ${orderBy}
     ${limit}
-  `, values).then((result) => normalizeRows(result.rows).map((row) => ({
-    ...row,
-    FULL_NAME: decryptField(row.FULL_NAME),
-    ROLE_JOB: decryptField(row.ROLE_JOB),
-    PHONE: decryptField(row.PHONE)
-  })));
+  `, values).then((result) => normalizeRows(result.rows));
 
   const [waiting, myTickets, closed] = await Promise.all([
     isAdmin
@@ -418,9 +316,9 @@ async function getTicketAccess(ticketId) {
     status: ticket.STATUS,
     departmentId: ticket.DEPARTMENT_ID,
     departmentName: ticket.DEPARTMENT_NAME,
-    fullName: decryptField(ticket.FULL_NAME),
-    phone: decryptField(ticket.PHONE),
-    roleJob: decryptField(ticket.ROLE_JOB)
+    fullName: ticket.FULL_NAME,
+    phone: ticket.PHONE,
+    roleJob: ticket.ROLE_JOB
   };
 }
 
@@ -465,11 +363,11 @@ async function getMessages(ticketId) {
     ticketId: row.TICKET_ID,
     senderType: row.SENDER_TYPE,
     senderId: row.SENDER_ID,
-    messageText: decryptField(row.MESSAGE_TEXT),
+    messageText: row.MESSAGE_TEXT,
     attachment: row.ATTACHMENT_DATA ? {
-      name: decryptField(row.ATTACHMENT_NAME),
-      type: decryptField(row.ATTACHMENT_TYPE),
-      data: decryptField(row.ATTACHMENT_DATA)
+      name: row.ATTACHMENT_NAME,
+      type: row.ATTACHMENT_TYPE,
+      data: row.ATTACHMENT_DATA
     } : null,
     createdAt: row.CREATED_AT
   }));
@@ -487,10 +385,10 @@ async function createMessage({ ticketId, senderType, senderId, text, attachment 
       ticketId,
       senderType,
       senderId || null,
-      encryptField(text || ''),
-      attachment ? encryptField(attachment.name) : null,
-      attachment ? encryptField(attachment.type) : null,
-      attachment ? encryptField(attachment.data) : null
+      text || '',
+      attachment?.name || null,
+      attachment?.type || null,
+      attachment?.data || null
     ]
   );
 
@@ -513,7 +411,7 @@ async function createAiMessageIfWaiting({ ticketId, text }) {
      WHERE t.id = $1 AND t.status = 'WAITING'
        AND t.assigned_agent_id IS NULL AND t.ai_handoff = FALSE
      RETURNING id AS "ID", created_at AS "CREATED_AT"`,
-    [ticketId, encryptField(text)]
+    [ticketId, text]
   );
   const message = result.rows[0];
   return message ? {
@@ -555,17 +453,11 @@ module.exports = {
               password_hash AS "PASSWORD_HASH", department_id AS "DEPARTMENT_ID",
               is_admin AS "IS_ADMIN"
        FROM agents
-       WHERE email_lookup_hash = $1`,
-      [createBlindIndex('agent-email', email)]
+       WHERE LOWER(BTRIM(email)) = LOWER(BTRIM($1))`,
+      [email]
     );
     const agent = normalizeRows(result.rows)[0];
-    return agent
-      ? {
-        ...agent,
-        NAME: decryptField(agent.NAME),
-        EMAIL: decryptField(agent.EMAIL)
-      }
-      : null;
+    return agent || null;
   },
   getDashboard,
   getTicketAccess,
@@ -588,10 +480,8 @@ module.exports = {
     const result = await pool.query(
       'SELECT id AS "ID", name AS "NAME", department_id AS "DEPARTMENT_ID" FROM agents'
     );
-    return normalizeRows(result.rows).map((agent) => ({
-      ...agent,
-      NAME: decryptField(agent.NAME)
-    })).sort((first, second) => first.NAME.localeCompare(second.NAME));
+    return normalizeRows(result.rows)
+      .sort((first, second) => first.NAME.localeCompare(second.NAME));
   },
   createMessage,
   createAiMessageIfWaiting,
