@@ -54,11 +54,13 @@ O servidor também aplica cabeçalhos de segurança, validação de origem nas o
 
 ## Assistente de IA por setor
 
-O assistente responde automaticamente às mensagens enquanto o chamado estiver aguardando na fila. Quando um atendente assume o chamado, as respostas automáticas param e o atendimento continua com a pessoa. Um administrador pode abrir **Configurar IA** no painel e definir se a IA está ativa e as orientações específicas de cada setor. Novos setores começam com a IA desativada.
+O assistente responde automaticamente às mensagens enquanto o chamado estiver aguardando na fila. Quando um atendente assume o chamado, as respostas automáticas param e o atendimento continua com a pessoa. Um administrador pode abrir **Configurar IA** no painel, editar as orientações padrão e adicionar um complemento para cada setor, ou ativar a IA em todos os setores de uma vez. Novos setores começam com orientações gerais e a IA desativada.
 
 Configure `GEMINI_API_KEY` como variável privada no ambiente do servidor; opcionalmente, defina `GEMINI_MODEL` (padrão `gemini-3.5-flash-lite`). Crie a chave no [Google AI Studio](https://aistudio.google.com/apikey). Sem a chave, é possível salvar as orientações, mas não ativar respostas. Mensagens sem resposta confiável ou que precisem de uma pessoa são sinalizadas para encaminhamento humano; falhas do provedor não geram uma resposta inventada e o chamado permanece na fila.
 
-A integração envia ao Gemini o nome do setor, as orientações cadastradas e até as últimas 20 mensagens da conversa. Nome, telefone e outros campos do cadastro não são enviados pela integração. Antes de ativar, revise as políticas internas de privacidade e o tratamento de dados aplicável à empresa. Não coloque credenciais, dados pessoais ou informações confidenciais nas orientações do setor. No Supabase, as configurações de IA são aplicadas automaticamente na inicialização.
+A integração envia ao Gemini o nome do setor, as orientações e complemento cadastrados, até as últimas 20 mensagens da conversa e, no setor de Vendas, o catálogo de demonstração. Nome, telefone e outros campos do cadastro não são enviados pela integração. Antes de ativar, revise as políticas internas de privacidade e o tratamento de dados aplicável à empresa. Não coloque credenciais, dados pessoais ou informações confidenciais nas orientações do setor. No Supabase, as configurações e os produtos de demonstração são aplicados automaticamente na inicialização.
+
+O catálogo inicial de Vendas contém produtos e preços fictícios para teste. Não use esses valores como preços ou disponibilidade reais.
 
 ## Usuário de demonstração local
 

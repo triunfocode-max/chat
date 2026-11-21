@@ -39,9 +39,11 @@ const aiSettingsDialog = document.getElementById('aiSettingsDialog');
 const aiDepartmentSelect = document.getElementById('aiDepartmentSelect');
 const aiEnabledInput = document.getElementById('aiEnabledInput');
 const aiInstructionsInput = document.getElementById('aiInstructionsInput');
+const aiAdditionalContextInput = document.getElementById('aiAdditionalContextInput');
 const aiSettingsStatus = document.getElementById('aiSettingsStatus');
 const aiSettingsError = document.getElementById('aiSettingsError');
 const saveAiSettingsButton = document.getElementById('saveAiSettingsButton');
+const activateAllAiButton = document.getElementById('activateAllAiButton');
 
 let currentAgent = null;
 let dashboard = { waiting: [], myTickets: [], closed: [] };
@@ -388,8 +390,8 @@ function selectedAiDepartment() {
 function renderAiDepartmentSettings() {
   const department = selectedAiDepartment();
   aiEnabledInput.checked = Boolean(department?.AI_ENABLED);
-  aiEnabledInput.disabled = !aiSettingsConfigured;
   aiInstructionsInput.value = department?.AI_INSTRUCTIONS || '';
+  aiAdditionalContextInput.value = department?.AI_ADDITIONAL_CONTEXT || '';
 }
 
 async function openAiSettings() {
@@ -405,8 +407,8 @@ async function openAiSettings() {
       (department) => new Option(department.NAME, department.ID)
     ));
     aiSettingsStatus.textContent = aiSettingsConfigured
-      ? `IA configurada · modelo ${data.model}. Ativa somente enquanto o chamado estiver na fila.`
-      : 'Configure GEMINI_API_KEY no servidor para ativar respostas automáticas.';
+      ? `IA configurada · modelo ${data.model}. As respostas automáticas funcionam enquanto o chamado estiver na fila.`
+      : 'A chave GEMINI_API_KEY não está configurada no servidor. Você pode editar e salvar orientações, mas a ativação só será aplicada após configurar essa chave.';
     renderAiDepartmentSettings();
     aiSettingsDialog.classList.remove('hidden');
     aiSettingsDialog.classList.add('flex');
@@ -474,8 +476,37 @@ notificationButton.addEventListener('click', () => {
 
 aiSettingsButton.addEventListener('click', openAiSettings);
 aiDepartmentSelect.addEventListener('change', renderAiDepartmentSettings);
+aiEnabledInput.addEventListener('change', () => {
+  if (aiEnabledInput.checked && !aiSettingsConfigured) {
+    aiSettingsError.textContent = 'A opção foi marcada, mas não será ativada sem GEMINI_API_KEY no servidor. Configure a chave e salve novamente.';
+    aiSettingsError.classList.remove('hidden');
+  } else {
+    aiSettingsError.classList.add('hidden');
+  }
+});
 document.getElementById('closeAiSettings').addEventListener('click', closeAiSettings);
 document.getElementById('cancelAiSettings').addEventListener('click', closeAiSettings);
+activateAllAiButton.addEventListener('click', async () => {
+  activateAllAiButton.disabled = true;
+  aiSettingsError.classList.add('hidden');
+  try {
+    const response = await fetch('/api/departments/ai/all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Não foi possível ativar a IA em todos os setores.');
+    aiDepartments = data.departments || [];
+    renderAiDepartmentSettings();
+    aiSettingsStatus.textContent = 'IA ativada em todos os setores.';
+  } catch (error) {
+    aiSettingsError.textContent = error.message;
+    aiSettingsError.classList.remove('hidden');
+  } finally {
+    activateAllAiButton.disabled = false;
+  }
+});
 saveAiSettingsButton.addEventListener('click', async () => {
   const departmentId = Number(aiDepartmentSelect.value);
   saveAiSettingsButton.disabled = true;
@@ -486,7 +517,8 @@ saveAiSettingsButton.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         enabled: aiEnabledInput.checked,
-        instructions: aiInstructionsInput.value
+        instructions: aiInstructionsInput.value,
+        additionalContext: aiAdditionalContextInput.value
       })
     });
     const data = await response.json();

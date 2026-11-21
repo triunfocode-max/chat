@@ -1,14 +1,19 @@
 const bcrypt = require('bcryptjs');
+const {
+  DEFAULT_DEPARTMENT_GUIDANCE,
+  DEFAULT_NEW_DEPARTMENT_GUIDANCE,
+  TEST_SALES_PRODUCTS
+} = require('./ai-seed-data');
 
 if (process.env.NODE_ENV === 'production' && (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD.length < 12)) {
   throw new Error('Em produção, defina ADMIN_EMAIL e ADMIN_PASSWORD com pelo menos 12 caracteres.');
 }
 
 const departments = [
-  { ID: 1, NAME: 'Atendimento', AI_ENABLED: false, AI_INSTRUCTIONS: '' },
-  { ID: 2, NAME: 'Financeiro', AI_ENABLED: false, AI_INSTRUCTIONS: '' },
-  { ID: 3, NAME: 'Suporte Técnico', AI_ENABLED: false, AI_INSTRUCTIONS: '' },
-  { ID: 4, NAME: 'Vendas', AI_ENABLED: false, AI_INSTRUCTIONS: '' }
+  { ID: 1, NAME: 'Atendimento', AI_ENABLED: false, AI_INSTRUCTIONS: DEFAULT_DEPARTMENT_GUIDANCE[1], AI_ADDITIONAL_CONTEXT: '' },
+  { ID: 2, NAME: 'Financeiro', AI_ENABLED: false, AI_INSTRUCTIONS: DEFAULT_DEPARTMENT_GUIDANCE[2], AI_ADDITIONAL_CONTEXT: '' },
+  { ID: 3, NAME: 'Suporte Técnico', AI_ENABLED: false, AI_INSTRUCTIONS: DEFAULT_DEPARTMENT_GUIDANCE[3], AI_ADDITIONAL_CONTEXT: '' },
+  { ID: 4, NAME: 'Vendas', AI_ENABLED: false, AI_INSTRUCTIONS: DEFAULT_DEPARTMENT_GUIDANCE[4], AI_ADDITIONAL_CONTEXT: '' }
 ];
 const defaultAgent = { 
   ID: 1,
@@ -75,13 +80,19 @@ function createDepartment(name) {
     return { department: { id: existing.ID, name: existing.NAME }, created: false };
   }
 
-  const department = { ID: nextDepartmentId++, NAME: name, AI_ENABLED: false, AI_INSTRUCTIONS: '' };
+  const department = {
+    ID: nextDepartmentId++,
+    NAME: name,
+    AI_ENABLED: false,
+    AI_INSTRUCTIONS: DEFAULT_NEW_DEPARTMENT_GUIDANCE,
+    AI_ADDITIONAL_CONTEXT: ''
+  };
   departments.push(department);
 
   return { department: { id: department.ID, name: department.NAME }, created: true };
 }
 
-function updateDepartmentAiSettings(departmentId, { enabled, instructions }) {
+function updateDepartmentAiSettings(departmentId, { enabled, instructions, additionalContext }) {
   const department = departments.find((item) => item.ID === departmentId);
   if (!department) {
     return null;
@@ -89,7 +100,23 @@ function updateDepartmentAiSettings(departmentId, { enabled, instructions }) {
 
   department.AI_ENABLED = enabled;
   department.AI_INSTRUCTIONS = instructions;
+  department.AI_ADDITIONAL_CONTEXT = additionalContext ?? department.AI_ADDITIONAL_CONTEXT ?? '';
   return department;
+}
+
+function listDepartments() {
+  return departments.slice().sort((a, b) => a.NAME.localeCompare(b.NAME));
+}
+
+function updateAllDepartmentAiSettings(enabled) {
+  departments.forEach((department) => {
+    department.AI_ENABLED = enabled;
+  });
+  return listDepartments();
+}
+
+function listProducts() {
+  return TEST_SALES_PRODUCTS.map((product) => ({ ...product }));
 }
 
 function registerCustomer({ fullName, roleJob, phone, departmentId }) {
@@ -277,9 +304,11 @@ function getTicketAccess(ticketId) {
 }
 
 module.exports = {
-  listDepartments: () => departments.slice().sort((a, b) => a.NAME.localeCompare(b.NAME)),
+  listDepartments,
   createDepartment,
   updateDepartmentAiSettings,
+  updateAllDepartmentAiSettings,
+  listProducts,
   registerCustomer,
   findAgentByEmail: (email) => agents.find((agent) => agent.EMAIL === email) || null,
   getDashboard,

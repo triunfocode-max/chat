@@ -10,6 +10,7 @@ test('builds a sector-specific prompt from the conversation without customer pro
   const messages = buildConversationMessages({
     departmentName: 'Financeiro',
     instructions: 'Orientar sobre segunda via de boleto.',
+    additionalContext: 'Atender em horário comercial.',
     messages: [
       { senderType: 'CUSTOMER', messageText: 'Preciso da segunda via.' },
       { senderType: 'BOT', messageText: 'Posso ajudar.' },
@@ -19,10 +20,29 @@ test('builds a sector-specific prompt from the conversation without customer pro
 
   assert.match(messages.systemInstruction.parts[0].text, /Financeiro/);
   assert.match(messages.systemInstruction.parts[0].text, /segunda via de boleto/);
+  assert.match(messages.systemInstruction.parts[0].text, /Atender em horário comercial/);
   assert.deepEqual(messages.contents, [
     { role: 'user', parts: [{ text: 'Preciso da segunda via.' }] },
     { role: 'model', parts: [{ text: 'Posso ajudar.' }] }
   ]);
+});
+
+test('includes the sales demo catalog as product context for the assistant', () => {
+  const messages = buildConversationMessages({
+    departmentName: 'Vendas',
+    instructions: 'Usar o catálogo de demonstração.',
+    products: [{
+      sku: 'TEST-001',
+      name: 'Produto de teste',
+      description: 'Item fictício para validação.',
+      price: 12.5,
+      stock: 3
+    }],
+    messages: [{ senderType: 'CUSTOMER', messageText: 'Qual é o produto de teste?' }]
+  });
+  const instructions = messages.systemInstruction.parts[0].text;
+  assert.match(instructions, /TEST-001 \| Produto de teste/);
+  assert.match(instructions, /preços e estoques são apenas para demonstração/i);
 });
 
 test('parses valid replies and rejects malformed provider output', () => {

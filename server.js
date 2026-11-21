@@ -141,9 +141,14 @@ async function replyWithAi(ticketId) {
   }
 
   const messages = await store.getMessages(ticketId);
+  const products = Number(ticket.departmentId) === 4 && typeof store.listProducts === 'function'
+    ? await store.listProducts()
+    : [];
   const generated = await generateDepartmentReply({
     departmentName: department.NAME,
     instructions: department.AI_INSTRUCTIONS,
+    additionalContext: department.AI_ADDITIONAL_CONTEXT,
+    products,
     messages
   });
 
@@ -299,6 +304,23 @@ app.get('/api/departments/ai', requireAgent, requireAdmin, async (req, res) => {
   }
 });
 
+app.post('/api/departments/ai/all', requireAgent, requireAdmin, async (req, res) => {
+  try {
+    const enabled = req.body?.enabled;
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ message: 'Informe se a IA deve ficar ativada ou desativada em todos os setores.' });
+    }
+    if (enabled && !process.env.GEMINI_API_KEY) {
+      return res.status(503).json({ message: 'Configure GEMINI_API_KEY nas variáveis do servidor antes de ativar a IA.' });
+    }
+
+    const departments = await store.updateAllDepartmentAiSettings(enabled);
+    return res.json({ success: true, departments });
+  } catch (error) {
+    return sendServerError(res, error, 'Falha ao atualizar IA dos setores', 'Não foi possível atualizar a IA dos setores.');
+  }
+});
+
 app.post('/api/departments/:id/ai', requireAgent, requireAdmin, async (req, res) => {
   try {
     const departmentId = Number(req.params.id);
@@ -307,19 +329,29 @@ app.post('/api/departments/:id/ai', requireAgent, requireAdmin, async (req, res)
       : {};
     const enabled = body.enabled;
     const instructions = typeof body.instructions === 'string' ? body.instructions.trim() : null;
+    const additionalContext = body.additionalContext === undefined
+      ? ''
+      : typeof body.additionalContext === 'string'
+        ? body.additionalContext.trim()
+        : null;
 
     if (
       !Number.isSafeInteger(departmentId) || departmentId < 1
       || typeof enabled !== 'boolean'
       || instructions === null || instructions.length > 4000
+      || additionalContext === null || additionalContext.length > 2000
     ) {
-      return res.status(400).json({ message: 'Setor ou orientações inválidas. O limite das orientações é 4000 caracteres.' });
+      return res.status(400).json({ message: 'Setor ou orientações inválidas. Os limites são 4000 caracteres para orientações e 2000 para o complemento.' });
     }
     if (enabled && !process.env.GEMINI_API_KEY) {
-      return res.status(503).json({ message: 'Configure GEMINI_API_KEY no servidor antes de ativar a IA.' });
+      return res.status(503).json({ message: 'Configure GEMINI_API_KEY nas variáveis do servidor antes de ativar a IA.' });
     }
 
-    const department = await store.updateDepartmentAiSettings(departmentId, { enabled, instructions });
+    const department = await store.updateDepartmentAiSettings(departmentId, {
+      enabled,
+      instructions,
+      additionalContext
+    });
     if (!department) {
       return res.status(404).json({ message: 'Setor não encontrado.' });
     }
