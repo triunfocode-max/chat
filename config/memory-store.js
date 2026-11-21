@@ -213,13 +213,18 @@ function transferTicketToAgent(ticketId, departmentId, agentId) {
   return getTicketAccess(ticketId);
 }
 
-function createMessage({ ticketId, senderType, senderId, text }) {
+function createMessage({ ticketId, senderType, senderId, text, attachment }) {
   const message = {
     id: nextMessageId++,
     ticketId,
     senderType,
     senderId: senderId || null,
     messageText: text,
+    attachment: attachment ? {
+      name: attachment.name,
+      type: attachment.type,
+      data: attachment.data
+    } : null,
     createdAt: new Date().toISOString()
   };
   messages.push(message);

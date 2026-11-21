@@ -14,7 +14,7 @@ const { generateDepartmentReply } = require('./config/ai-agent');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  maxHttpBufferSize: 16 * 1024,
+  maxHttpBufferSize: 4 * 1024 * 1024,
   perMessageDeflate: false
 });
 
@@ -26,6 +26,7 @@ const sessions = new Map();
 const ticketAccessTokens = new Map();
 const onlineAgents = new Map();
 const aiReplyQueues = new Map();
+const messageDeliveryCache = new Map();
 const SAFE_ERROR_MESSAGES = new Set([
   'DATA_ENCRYPTION_KEY deve ser uma chave Base64 válida de 32 bytes.',
   'Formato de dado criptografado inválido.',
@@ -786,6 +787,10 @@ io.on('connection', (socket) => {
 
       socket.join(`ticket:${parsedTicketId}`);
       socket.emit('ticket:joined', { ticketId: parsedTicketId });
+      socket.emit('ticket:history', {
+        ticketId: parsedTicketId,
+        messages: await store.getMessages(parsedTicketId)
+      });
     } catch (error) {
       socket.emit('ticket:error', { message: 'Erro ao acessar o atendimento.' });
       console.error('Falha ao validar acesso ao atendimento:', safeErrorDetail(error));
@@ -818,14 +823,14 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const { ticketId, senderType, text } = payload && typeof payload === 'object' && !Array.isArray(payload)
+    const { ticketId, senderType, text, attachment, tempId } = payload && typeof payload === 'object' && !Array.isArray(payload)
       ? payload
       : {};
     const parsedTicketId = Number(ticketId);
     const normalizedSenderType = String(senderType || '').toUpperCase();
     const trimmedText = String(text || '').trim();
 
-    if (!parsedTicketId || !trimmedText || trimmedText.length > 1000) {
+    if (!parsedTicketId || (!trimmedText && !attachment) || trimmedText.length > 1000) {
       socket.emit('message:error', { message: 'Mensagem inválida ou maior que 1000 caracteres.' });
       return;
     }
@@ -864,14 +869,38 @@ io.on('connection', (socket) => {
         senderId = ticket.customerId;
       }
 
-      const message = await store.createMessage({
-        ticketId: parsedTicketId,
-        senderType: normalizedSenderType,
-        senderId,
-        text: trimmedText
-      });
+      let normalizedAttachment = null;
+      if (attachment) {
+        const name = String(attachment.name || '').trim().slice(0, 255);
+        const type = String(attachment.type || '').trim().slice(0, 100);
+        const data = typeof attachment.data === 'string' ? attachment.data : '';
+        const allowed = /^(image\/(jpeg|png|gif|webp)|application\/pdf|text\/plain|application\/(msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))$/i.test(type);
+        if (!name || !allowed || data.length > 4 * 1024 * 1024 || !/^data:[^;]+;base64,[A-Za-z0-9+/=]+$/.test(data)) {
+          socket.emit('message:error', { message: 'Anexo inválido. Use imagem, PDF ou documento de até 3 MB.' });
+          return;
+        }
+        normalizedAttachment = { name, type, data };
+      }
 
-      io.to(`ticket:${parsedTicketId}`).emit('new-message', message);
+      const deliveryKey = tempId ? `${parsedTicketId}:${String(tempId).slice(0, 100)}` : null;
+      let message = deliveryKey ? messageDeliveryCache.get(deliveryKey) : null;
+      if (!message) {
+        message = await store.createMessage({
+          ticketId: parsedTicketId,
+          senderType: normalizedSenderType,
+          senderId,
+          text: trimmedText,
+          attachment: normalizedAttachment
+        });
+        if (deliveryKey) {
+          messageDeliveryCache.set(deliveryKey, message);
+          if (messageDeliveryCache.size > 10000) {
+            messageDeliveryCache.delete(messageDeliveryCache.keys().next().value);
+          }
+        }
+      }
+
+      io.to(`ticket:${parsedTicketId}`).emit('new-message', { ...message, tempId: tempId || null });
       if (normalizedSenderType === 'CUSTOMER' && ticket.assignedAgentId) {
         io.to(`agent:${ticket.assignedAgentId}`).emit('ticket:message', {
           ticketId: parsedTicketId,

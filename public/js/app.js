@@ -11,6 +11,7 @@ const chatDepartment = document.getElementById('chatDepartment');
 const statusBadge = document.getElementById('statusBadge');
 const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendButton');
+const attachmentInput = document.getElementById('attachmentInput');
 const chatNotice = document.getElementById('chatNotice');
 const formError = document.getElementById('formError');
 const startChatButton = document.getElementById('startChatButton');
@@ -23,6 +24,9 @@ const confirmCollaboratorTransfer = document.getElementById('confirmCollaborator
 
 let currentTicket = null;
 let joinedTicketId = null;
+let selectedAttachment = null;
+const customerQueueKey = 'multiatende_pending_messages';
+const customerSessionKey = 'multiatende_customer_session';
 
 function showPanel(panel) {
   [rolePanel, formPanel, chatPanel].forEach((item) => item.classList.add('hidden'));
@@ -43,8 +47,27 @@ function addMessage(message) {
   sender.className = `mb-1 text-[10px] font-semibold uppercase tracking-wide ${isCustomer ? 'text-sky-100' : 'text-slate-400'}`;
   sender.textContent = isCustomer ? 'Você' : senderType === 'BOT' ? 'Assistente IA' : 'Atendente';
   const text = document.createElement('div');
-  text.textContent = message.messageText;
-  item.append(sender, text);
+  text.textContent = message.messageText || '';
+  item.append(sender);
+  if (text.textContent) item.append(text);
+  if (message.attachment) {
+    const attachment = document.createElement('div');
+    attachment.className = 'mt-2';
+    if (message.attachment.type?.startsWith('image/') && message.attachment.data) {
+      const image = document.createElement('img');
+      image.src = message.attachment.data;
+      image.alt = message.attachment.name || 'Imagem';
+      image.className = 'max-h-64 max-w-full rounded-lg object-contain';
+      attachment.appendChild(image);
+    }
+    const link = document.createElement('a');
+    link.href = message.attachment.data;
+    link.download = message.attachment.name || 'arquivo';
+    link.className = 'mt-2 block text-xs font-semibold underline';
+    link.textContent = `📎 ${message.attachment.name || 'Arquivo anexado'}`;
+    attachment.appendChild(link);
+    item.append(attachment);
+  }
   chatMessages.appendChild(item);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -121,6 +144,7 @@ customerForm.addEventListener('submit', async (event) => {
     }
 
     currentTicket = data.ticket;
+    localStorage.setItem(customerSessionKey, JSON.stringify(currentTicket));
     joinedTicketId = null;
     ticketIdLabel.textContent = `#${currentTicket.id}`;
     chatDepartment.textContent = departmentSelect.selectedOptions[0].textContent;
@@ -290,20 +314,69 @@ document.getElementById('collaboratorCloseButton').addEventListener('click', asy
   }
 });
 
+attachmentInput.addEventListener('change', () => {
+  const file = attachmentInput.files?.[0];
+  if (!file) {
+    selectedAttachment = null;
+    return;
+  }
+  if (file.size > 3 * 1024 * 1024) {
+    chatNotice.textContent = 'O arquivo excede o limite de 3 MB.';
+    attachmentInput.value = '';
+    selectedAttachment = null;
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    selectedAttachment = { name: file.name, type: file.type || 'application/octet-stream', data: reader.result };
+    chatNotice.textContent = `Anexo pronto: ${file.name}`;
+  };
+  reader.readAsDataURL(file);
+});
+
+function readPendingMessages() {
+  try {
+    return JSON.parse(localStorage.getItem(customerQueueKey) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function savePendingMessages(messages) {
+  localStorage.setItem(customerQueueKey, JSON.stringify(messages));
+}
+
+function flushPendingMessages() {
+  if (!currentTicket || !joinedTicketId) return;
+  const pending = readPendingMessages().filter((item) => Number(item.ticketId) === Number(currentTicket.id));
+  pending.forEach((item) => socket.emit('send-message', item));
+}
+
 chatForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const text = messageInput.value.trim();
-  if (!currentTicket || !text || !joinedTicketId) {
+  if (!currentTicket || (!text && !selectedAttachment)) {
     return;
   }
 
   sendButton.disabled = true;
-  socket.emit('send-message', {
+  const payload = {
     ticketId: currentTicket.id,
     senderType: 'CUSTOMER',
-    text
-  });
+    text,
+    attachment: selectedAttachment,
+    tempId: `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  };
+  if (!socket.connected || !joinedTicketId) {
+    savePendingMessages([...readPendingMessages(), payload]);
+    chatNotice.textContent = 'Sem conexão. Sua mensagem será enviada ao reconectar.';
+  } else {
+    socket.emit('send-message', payload);
+  }
   messageInput.value = '';
+  attachmentInput.value = '';
+  selectedAttachment = null;
+  chatNotice.textContent = 'Enviando mensagem...';
 });
 
 socket.on('connect', () => {
@@ -313,9 +386,9 @@ socket.on('connect', () => {
 
 socket.on('disconnect', () => {
   joinedTicketId = null;
-  messageInput.disabled = true;
-  sendButton.disabled = true;
   if (currentTicket) {
+    messageInput.disabled = currentTicket.status === 'CLOSED';
+    sendButton.disabled = messageInput.disabled;
     chatNotice.textContent = 'Conexão interrompida. Tentando reconectar...';
   }
 });
@@ -330,12 +403,29 @@ socket.on('ticket:joined', ({ ticketId }) => {
   sendButton.disabled = false;
   messageInput.focus();
   chatNotice.textContent = 'Você está conectado. Pode enviar sua mensagem.';
+  flushPendingMessages();
+});
+
+socket.on('ticket:history', ({ ticketId, messages }) => {
+  if (!currentTicket || Number(ticketId) !== Number(currentTicket.id)) return;
+  chatMessages.replaceChildren();
+  if (messages.length === 0) {
+    addMessage({
+      senderType: 'AGENT',
+      messageText: 'Olá! Seu chamado foi criado. Um atendente do setor responderá em breve.'
+    });
+  } else {
+    messages.forEach(addMessage);
+  }
 });
 
 socket.on('new-message', (message) => {
   if (currentTicket && Number(message.ticketId) === Number(currentTicket.id)) {
     addMessage(message);
     sendButton.disabled = false;
+    if (message.tempId) {
+      savePendingMessages(readPendingMessages().filter((item) => item.tempId !== message.tempId));
+    }
   }
 });
 
@@ -380,6 +470,21 @@ socket.on('message:error', ({ message }) => {
   chatNotice.textContent = message;
   sendButton.disabled = false;
 });
+
+try {
+  const savedSession = JSON.parse(localStorage.getItem(customerSessionKey) || 'null');
+  if (savedSession?.id && savedSession?.accessToken) {
+    currentTicket = savedSession;
+    ticketIdLabel.textContent = `#${currentTicket.id}`;
+    chatDepartment.textContent = 'Atendimento';
+    chatMessages.replaceChildren();
+    setStatus(currentTicket.status || 'WAITING');
+    showPanel(chatPanel);
+    joinCurrentTicket();
+  }
+} catch {
+  localStorage.removeItem(customerSessionKey);
+}
 
 loadDepartments().catch((error) => {
   departmentSelect.replaceChildren(new Option('Erro ao carregar setores', ''));

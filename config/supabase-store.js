@@ -112,7 +112,7 @@ function normalizeRows(rows = []) {
 
 async function encryptExistingData() {
   const customers = await pool.query(
-    `SELECT id, full_name, role_job, phone
+    `SELECT id, full_name, role_job, phone, phone_lookup_hash
      FROM customers
      ORDER BY id`
   );
@@ -142,7 +142,7 @@ async function encryptExistingData() {
   }
 
   const agents = await pool.query(
-    `SELECT id, name, email
+    `SELECT id, name, email, email_lookup_hash
      FROM agents
      ORDER BY id`
   );
@@ -210,6 +210,13 @@ async function initialize() {
       ALTER COLUMN name TYPE TEXT,
       ALTER COLUMN email TYPE TEXT,
       ADD COLUMN IF NOT EXISTS email_lookup_hash VARCHAR(64)
+  `);
+  await pool.query(`
+    ALTER TABLE messages
+      ADD COLUMN IF NOT EXISTS attachment_name TEXT,
+      ADD COLUMN IF NOT EXISTS attachment_type TEXT,
+      ADD COLUMN IF NOT EXISTS attachment_data TEXT,
+      ALTER COLUMN message_text SET DEFAULT ''
   `);
   await encryptExistingData();
   await pool.query('ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_sender_type_check');
@@ -444,7 +451,9 @@ async function transferTicketToAgent(ticketId, departmentId, agentId) {
 async function getMessages(ticketId) {
   const result = await pool.query(
     `SELECT id AS "ID", ticket_id AS "TICKET_ID", sender_type AS "SENDER_TYPE",
-            sender_id AS "SENDER_ID", message_text AS "MESSAGE_TEXT", created_at AS "CREATED_AT"
+            sender_id AS "SENDER_ID", message_text AS "MESSAGE_TEXT",
+            attachment_name AS "ATTACHMENT_NAME", attachment_type AS "ATTACHMENT_TYPE",
+            attachment_data AS "ATTACHMENT_DATA", created_at AS "CREATED_AT"
      FROM messages
      WHERE ticket_id = $1
      ORDER BY created_at ASC, id ASC`,
@@ -457,16 +466,32 @@ async function getMessages(ticketId) {
     senderType: row.SENDER_TYPE,
     senderId: row.SENDER_ID,
     messageText: decryptField(row.MESSAGE_TEXT),
+    attachment: row.ATTACHMENT_DATA ? {
+      name: decryptField(row.ATTACHMENT_NAME),
+      type: decryptField(row.ATTACHMENT_TYPE),
+      data: decryptField(row.ATTACHMENT_DATA)
+    } : null,
     createdAt: row.CREATED_AT
   }));
 }
 
-async function createMessage({ ticketId, senderType, senderId, text }) {
+async function createMessage({ ticketId, senderType, senderId, text, attachment }) {
   const result = await pool.query(
-    `INSERT INTO messages (ticket_id, sender_type, sender_id, message_text)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO messages (
+       ticket_id, sender_type, sender_id, message_text,
+       attachment_name, attachment_type, attachment_data
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id AS "ID", created_at AS "CREATED_AT"`,
-    [ticketId, senderType, senderId || null, encryptField(text)]
+    [
+      ticketId,
+      senderType,
+      senderId || null,
+      encryptField(text || ''),
+      attachment ? encryptField(attachment.name) : null,
+      attachment ? encryptField(attachment.type) : null,
+      attachment ? encryptField(attachment.data) : null
+    ]
   );
 
   return {
@@ -475,6 +500,7 @@ async function createMessage({ ticketId, senderType, senderId, text }) {
     senderType,
     senderId: senderId || null,
     messageText: text,
+    attachment: attachment || null,
     createdAt: result.rows[0].CREATED_AT
   };
 }

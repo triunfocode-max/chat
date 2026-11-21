@@ -16,6 +16,7 @@ const chatSubtitle = document.getElementById('chatSubtitle');
 const agentChatForm = document.getElementById('agentChatForm');
 const agentMessageInput = document.getElementById('agentMessageInput');
 const sendAgentMessage = document.getElementById('sendAgentMessage');
+const agentAttachmentInput = document.getElementById('agentAttachmentInput');
 const assignTicketBtn = document.getElementById('assignTicketBtn');
 const transferTicketBtn = document.getElementById('transferTicketBtn');
 const finishTicketBtn = document.getElementById('finishTicketBtn');
@@ -51,6 +52,7 @@ let quickReplyTicket = null;
 let pendingQuickReplyText = null;
 let aiSettingsConfigured = false;
 let aiDepartments = [];
+let selectedAgentAttachment = null;
 const notifiedTicketIds = new Set();
 
 function escapeHtml(value) {
@@ -243,9 +245,28 @@ function renderMessage(message) {
   const time = document.createElement('span');
   time.textContent = ticketTime(message.createdAt);
   const text = document.createElement('div');
-  text.textContent = message.messageText;
+  text.textContent = message.messageText || '';
   meta.append(author, time);
-  item.append(meta, text);
+  item.append(meta);
+  if (text.textContent) item.append(text);
+  if (message.attachment) {
+    const attachment = document.createElement('div');
+    attachment.className = 'mt-2';
+    if (message.attachment.type?.startsWith('image/') && message.attachment.data) {
+      const image = document.createElement('img');
+      image.src = message.attachment.data;
+      image.alt = message.attachment.name || 'Imagem';
+      image.className = 'max-h-64 max-w-full rounded-lg object-contain';
+      attachment.appendChild(image);
+    }
+    const link = document.createElement('a');
+    link.href = message.attachment.data;
+    link.download = message.attachment.name || 'arquivo';
+    link.className = 'mt-2 block text-xs font-semibold underline';
+    link.textContent = `📎 ${message.attachment.name || 'Arquivo anexado'}`;
+    attachment.appendChild(link);
+    item.append(attachment);
+  }
   drawerMessages.appendChild(item);
   drawerMessages.scrollTop = drawerMessages.scrollHeight;
 }
@@ -597,17 +618,39 @@ finishTicketBtn.addEventListener('click', async () => {
   }
 });
 
+agentAttachmentInput.addEventListener('change', () => {
+  const file = agentAttachmentInput.files?.[0];
+  if (!file) {
+    selectedAgentAttachment = null;
+    return;
+  }
+  if (file.size > 3 * 1024 * 1024) {
+    window.alert('O arquivo excede o limite de 3 MB.');
+    agentAttachmentInput.value = '';
+    selectedAgentAttachment = null;
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    selectedAgentAttachment = { name: file.name, type: file.type || 'application/octet-stream', data: reader.result };
+  };
+  reader.readAsDataURL(file);
+});
+
 agentChatForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const text = agentMessageInput.value.trim();
-  if (!selectedTicket || !text || agentMessageInput.disabled) return;
+  if (!selectedTicket || (!text && !selectedAgentAttachment) || agentMessageInput.disabled) return;
   sendAgentMessage.disabled = true;
   socket.emit('send-message', {
     ticketId: Number(selectedTicket.ID),
     senderType: 'AGENT',
-    text
+    text,
+    attachment: selectedAgentAttachment
   });
   agentMessageInput.value = '';
+  agentAttachmentInput.value = '';
+  selectedAgentAttachment = null;
 });
 
 logoutBtn.addEventListener('click', async () => {

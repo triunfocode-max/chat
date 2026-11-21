@@ -52,7 +52,10 @@ CREATE TABLE IF NOT EXISTS messages (
     ticket_id INTEGER NOT NULL REFERENCES tickets (id),
     sender_type VARCHAR(20) NOT NULL CHECK (sender_type IN ('CUSTOMER', 'AGENT', 'BOT')),
     sender_id INTEGER,
-    message_text TEXT NOT NULL,
+    message_text TEXT NOT NULL DEFAULT '',
+    attachment_name TEXT,
+    attachment_type TEXT,
+    attachment_data TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

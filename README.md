@@ -2,9 +2,7 @@
 
 ## Estrutura base do projeto
 
-- `sql/firebird_schema.sql` — script de criação do banco Firebird.
 - `sql/supabase_schema.sql` — script de criação do schema PostgreSQL no Supabase.
-- `config/db.js` — configuração da conexão com Firebird via `node-firebird`.
 - `config/supabase-store.js` — persistência PostgreSQL usada pelo Supabase.
 - `config/memory-store.js` — armazenamento temporário em memória, usado por padrão.
 - `server.js` — API Express + Socket.io.
@@ -51,7 +49,7 @@ O servidor cria/atualiza as contas configuradas no primeiro início. Em produç�
 
 Mantenha `SUPABASE_DB_URL`, `ADMIN_PASSWORD` e as senhas em `AGENTS_JSON` somente nas variáveis privadas do ambiente de execução. Não compartilhe nem publique o `.env`, a senha do banco ou uma chave `service_role`; esta integração usa a conexão PostgreSQL diretamente no servidor.
 
-As conexões usam TLS com validação do certificado. Se o provedor do banco exigir um certificado raiz próprio, informe o caminho do arquivo em `SUPABASE_CA_CERT`. Os chamados, mensagens, clientes e agentes ficam no PostgreSQL. Os tokens de acesso dos colaboradores são armazenados como hashes; o token em texto puro não é gravado no banco. A configuração não importa automaticamente dados de uma instalação anterior do Firebird ou da memória.
+As conexões usam TLS com validação do certificado. Se o provedor do banco exigir um certificado raiz próprio, informe o caminho do arquivo em `SUPABASE_CA_CERT`. Os chamados, mensagens, clientes e agentes ficam no PostgreSQL. Os tokens de acesso dos colaboradores são armazenados como hashes; o token em texto puro não é gravado no banco. A configuração não importa automaticamente dados de uma instalação anterior da memória.
 
 ### Criptografia e proteção dos dados
 
@@ -59,7 +57,7 @@ No modo Supabase, configure `DATA_ENCRYPTION_KEY` como uma chave Base64 gerada a
 
 Na inicialização, o servidor migra registros existentes e criptografa mensagens, nomes, cargos e telefones dos clientes e nomes e e-mails dos atendentes com AES-256-GCM. Índices HMAC permitem localizar clientes por telefone e atendentes por e-mail sem manter esses valores em texto puro; senhas continuam armazenadas com bcrypt. A migração é repetível e interrompe a inicialização se a chave estiver ausente, incorreta ou os dados não puderem ser decifrados. A aplicação decifra os campos somente no servidor para exibi-los às pessoas autorizadas. Isso protege dados em repouso no banco, não substitui HTTPS nem significa criptografia ponta a ponta.
 
-O servidor também aplica cabeçalhos de segurança, validação de origem nas operações de escrita, limite de tamanho das solicitações e limitação de requisições/login/mensagens. O `.gitignore` exclui arquivos de ambiente, certificados, bancos locais, logs e a pasta de uploads. O sistema ainda não possui envio de anexos; mantenha arquivos privados fora do repositório.
+O servidor também aplica cabeçalhos de segurança, validação de origem nas operações de escrita, limite de tamanho das solicitações e limitação de requisições/login/mensagens. O `.gitignore` exclui arquivos de ambiente, certificados, bancos locais, logs e a pasta de uploads. Anexos enviados pelas conversas são persistidos no armazenamento configurado. Mantenha arquivos privados fora do repositório e use limites adequados para dados sensíveis.
 
 ## Assistente de IA por setor
 
@@ -67,28 +65,7 @@ O assistente responde automaticamente às mensagens enquanto o chamado estiver a
 
 Configure `GEMINI_API_KEY` como variável privada no ambiente do servidor; opcionalmente, defina `GEMINI_MODEL` (padrão `gemini-3.5-flash-lite`). Crie a chave no [Google AI Studio](https://aistudio.google.com/apikey). Sem a chave, é possível salvar as orientações, mas não ativar respostas. Mensagens sem resposta confiável ou que precisem de uma pessoa são sinalizadas para encaminhamento humano; falhas do provedor não geram uma resposta inventada e o chamado permanece na fila.
 
-A integração envia ao Gemini o nome do setor, as orientações cadastradas e até as últimas 20 mensagens da conversa. Nome, telefone e outros campos do cadastro não são enviados pela integração. Antes de ativar, revise as políticas internas de privacidade e o tratamento de dados aplicável à empresa. Não coloque credenciais, dados pessoais ou informações confidenciais nas orientações do setor. No Supabase, as configurações de IA são aplicadas automaticamente na inicialização; no Firebird, o servidor adiciona as colunas necessárias ao banco existente.
-
-## Usar Firebird (opcional)
-
-Para usar o Firebird, configure o arquivo `.env` com `STORAGE=firebird` e os dados de conexão:
-
-```env
-STORAGE=firebird
-FB_HOST=127.0.0.1
-FB_PORT=3050
-FB_DATABASE=C:/firebird/data/chat.fdb
-FB_USER=SYSDBA
-FB_PASSWORD=masterkey
-```
-
-Crie o banco Firebird e execute o script SQL:
-
-```sql
-CREATE DATABASE 'C:/firebird/data/chat.fdb' USER 'SYSDBA' PASSWORD 'masterkey';
-```
-
-Depois execute o conteúdo do arquivo `sql/firebird_schema.sql` com um cliente Firebird (IBExpert, FlameRobin, isql).
+A integração envia ao Gemini o nome do setor, as orientações cadastradas e até as últimas 20 mensagens da conversa. Nome, telefone e outros campos do cadastro não são enviados pela integração. Antes de ativar, revise as políticas internas de privacidade e o tratamento de dados aplicável à empresa. Não coloque credenciais, dados pessoais ou informações confidenciais nas orientações do setor. No Supabase, as configurações de IA são aplicadas automaticamente na inicialização.
 
 ## Usuário de demonstração local
 

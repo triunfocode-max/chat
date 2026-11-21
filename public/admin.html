@@ -100,6 +100,10 @@
               </header>
               <div id="drawerMessages" class="message-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 md:p-6"></div>
               <form id="agentChatForm" class="flex gap-2 border-t border-slate-200 bg-white p-3 md:p-4">
+                <label class="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-50" title="Adicionar arquivo">
+                  <span aria-hidden="true">📎</span>
+                  <input id="agentAttachmentInput" type="file" accept="image/*,.pdf,.doc,.docx,.txt" class="hidden" />
+                </label>
                 <input id="agentMessageInput" type="text" maxlength="1000" disabled class="min-w-0 flex-1 rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-100" placeholder="Escreva uma mensagem..." />
                 <button id="sendAgentMessage" type="submit" disabled class="rounded-xl bg-sky-700 px-5 font-semibold text-white hover:bg-sky-800 disabled:opacity-50">Enviar</button>
               </form>
