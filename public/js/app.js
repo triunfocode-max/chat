@@ -25,6 +25,8 @@ const confirmCollaboratorTransfer = document.getElementById('confirmCollaborator
 let currentTicket = null;
 let joinedTicketId = null;
 let selectedAttachment = null;
+let historySyncTimer = null;
+let pendingFlushPromise = null;
 const customerQueueKey = 'multiatende_pending_messages';
 const customerSessionKey = 'multiatende_customer_session';
 
@@ -41,6 +43,13 @@ function showPanel(panel) {
 }
 
 function addMessage(message) {
+  if (
+    message.id !== undefined
+    && [...chatMessages.children].some((item) => item.dataset.messageId === String(message.id))
+  ) {
+    return;
+  }
+
   const item = document.createElement('div');
   const senderType = String(message.senderType).toUpperCase();
   const isCustomer = senderType === 'CUSTOMER';
@@ -80,6 +89,59 @@ function addMessage(message) {
   }
   chatMessages.appendChild(item);
   chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function mergeMessageHistory(messages) {
+  const historyIds = new Set(messages.map((message) => String(message.id)));
+  const arrivedDuringHistory = [...chatMessages.children].filter((item) => (
+    item.dataset.messageId && !historyIds.has(item.dataset.messageId)
+  ));
+  chatMessages.replaceChildren();
+  messages.forEach(addMessage);
+  arrivedDuringHistory.forEach((item) => chatMessages.appendChild(item));
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+async function syncCustomerHistory() {
+  if (!currentTicket) return;
+  const ticketId = Number(currentTicket.id);
+  const response = await fetch(`/api/tickets/${ticketId}/customer-messages`, {
+    headers: { 'X-Ticket-Token': currentTicket.accessToken }
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || 'Não foi possível sincronizar as mensagens.');
+  }
+  if (!currentTicket || Number(currentTicket.id) !== ticketId) return;
+
+  if (data.status) currentTicket.status = data.status;
+  if (data.departmentName) chatDepartment.textContent = data.departmentName;
+  updateCustomerComposer();
+  mergeMessageHistory(data.messages || []);
+}
+
+function startCustomerHistoryPolling() {
+  if (historySyncTimer || !currentTicket) return;
+  historySyncTimer = setInterval(() => {
+    syncCustomerHistory()
+      .then(() => flushPendingMessages())
+      .catch((error) => {
+        if (currentTicket) {
+          chatNotice.textContent = error.message || 'Não foi possível sincronizar as mensagens.';
+        }
+      });
+  }, 5000);
+  syncCustomerHistory()
+    .then(() => flushPendingMessages())
+    .catch((error) => {
+      chatNotice.textContent = error.message || 'Não foi possível sincronizar as mensagens.';
+    });
+}
+
+function stopCustomerHistoryPolling() {
+  if (!historySyncTimer) return;
+  clearInterval(historySyncTimer);
+  historySyncTimer = null;
 }
 
 function setStatus(status, departmentName, transferred = false) {
@@ -165,6 +227,7 @@ customerForm.addEventListener('submit', async (event) => {
     messageInput.value = '';
     setStatus('WAITING', chatDepartment.textContent);
     showPanel(chatPanel);
+    startCustomerHistoryPolling();
     joinCurrentTicket();
   } catch (error) {
     formError.textContent = error.message;
@@ -352,9 +415,48 @@ function savePendingMessages(messages) {
 }
 
 function flushPendingMessages() {
-  if (!currentTicket || !joinedTicketId) return;
-  const pending = readPendingMessages().filter((item) => Number(item.ticketId) === Number(currentTicket.id));
-  pending.forEach((item) => socket.emit('send-message', item));
+  if (!currentTicket || pendingFlushPromise) return pendingFlushPromise;
+
+  pendingFlushPromise = (async () => {
+    while (currentTicket) {
+      const item = readPendingMessages()
+        .find((message) => Number(message.ticketId) === Number(currentTicket.id));
+      if (!item) return;
+      try {
+        const response = await fetch(`/api/tickets/${Number(currentTicket.id)}/customer-messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Ticket-Token': currentTicket.accessToken
+          },
+          body: JSON.stringify({
+            text: item.text,
+            attachment: item.attachment,
+            tempId: item.tempId
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          if (response.status < 500) {
+            savePendingMessages(readPendingMessages().filter((message) => message.tempId !== item.tempId));
+          }
+          chatNotice.textContent = data.message || 'Não foi possível enviar a mensagem.';
+          return;
+        }
+
+        addMessage(data);
+        savePendingMessages(readPendingMessages().filter((message) => message.tempId !== item.tempId));
+        chatNotice.textContent = 'Mensagem enviada.';
+      } catch {
+        chatNotice.textContent = 'Sem conexão com o servidor. A mensagem ficará salva para tentar novamente.';
+        return;
+      }
+    }
+  })().finally(() => {
+    pendingFlushPromise = null;
+  });
+
+  return pendingFlushPromise;
 }
 
 chatForm.addEventListener('submit', (event) => {
@@ -364,7 +466,6 @@ chatForm.addEventListener('submit', (event) => {
     return;
   }
 
-  sendButton.disabled = true;
   const payload = {
     ticketId: currentTicket.id,
     senderType: 'CUSTOMER',
@@ -372,32 +473,37 @@ chatForm.addEventListener('submit', (event) => {
     attachment: selectedAttachment,
     tempId: `${Date.now()}-${Math.random().toString(36).slice(2)}`
   };
-  if (!socket.connected || !joinedTicketId) {
-    savePendingMessages([...readPendingMessages(), payload]);
-    chatNotice.textContent = socket.connected
-      ? 'Conectando ao atendimento. Sua mensagem será enviada assim que conectar.'
-      : 'Sem conexão. Sua mensagem será enviada ao reconectar.';
-  } else {
-    socket.emit('send-message', payload);
-    chatNotice.textContent = 'Enviando mensagem...';
-  }
+  savePendingMessages([...readPendingMessages(), payload]);
+  chatNotice.textContent = 'Enviando mensagem...';
   messageInput.value = '';
   attachmentInput.value = '';
   selectedAttachment = null;
   updateCustomerComposer();
+  flushPendingMessages();
 });
 
 socket.on('connect', () => {
   chatNotice.textContent = currentTicket ? 'Reconectando ao atendimento...' : '';
   joinCurrentTicket();
+  if (currentTicket) {
+    startCustomerHistoryPolling();
+    flushPendingMessages();
+  }
 });
 
 socket.on('disconnect', () => {
   joinedTicketId = null;
   if (currentTicket) {
     updateCustomerComposer();
-    chatNotice.textContent = 'Conexão interrompida. Tentando reconectar...';
+    chatNotice.textContent = 'Conexão em tempo real indisponível. Sincronizando pelo servidor...';
+    startCustomerHistoryPolling();
   }
+});
+
+socket.on('connect_error', () => {
+  if (!currentTicket) return;
+  chatNotice.textContent = 'Conexão em tempo real indisponível. Sincronizando pelo servidor...';
+  startCustomerHistoryPolling();
 });
 
 socket.on('ticket:joined', ({ ticketId, status }) => {
@@ -407,6 +513,7 @@ socket.on('ticket:joined', ({ ticketId, status }) => {
 
   joinedTicketId = Number(ticketId);
   if (status) currentTicket.status = status;
+  stopCustomerHistoryPolling();
   updateCustomerComposer();
   messageInput.focus();
   chatNotice.textContent = 'Você está conectado. Pode enviar sua mensagem.';
@@ -415,14 +522,7 @@ socket.on('ticket:joined', ({ ticketId, status }) => {
 
 socket.on('ticket:history', ({ ticketId, messages }) => {
   if (!currentTicket || Number(ticketId) !== Number(currentTicket.id)) return;
-  const historyIds = new Set(messages.map((message) => String(message.id)));
-  const arrivedDuringHistory = [...chatMessages.children].filter((item) => (
-    item.dataset.messageId && !historyIds.has(item.dataset.messageId)
-  ));
-  chatMessages.replaceChildren();
-  messages.forEach(addMessage);
-  arrivedDuringHistory.forEach((item) => chatMessages.appendChild(item));
-  chatMessages.scrollTop = chatMessages.scrollHeight;
+  mergeMessageHistory(messages);
 });
 
 socket.on('new-message', (message) => {
@@ -467,6 +567,7 @@ socket.on('agents:presence-updated', () => {
 
 socket.on('ticket:error', ({ message }) => {
   chatNotice.textContent = message;
+  startCustomerHistoryPolling();
 });
 
 socket.on('message:error', ({ message }) => {
@@ -483,6 +584,7 @@ try {
     chatMessages.replaceChildren();
     setStatus(currentTicket.status || 'WAITING');
     showPanel(chatPanel);
+    startCustomerHistoryPolling();
     joinCurrentTicket();
   }
 } catch {

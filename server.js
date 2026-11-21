@@ -59,6 +59,36 @@ async function getTicketAccessForToken(ticketId, accessToken) {
   return store.findTicketByAccessTokenHash(ticketId, tokenHash);
 }
 
+async function getCustomerTicket(ticketId, accessToken) {
+  const ticket = await store.getTicketAccess(ticketId);
+  if (!ticket) return null;
+
+  const access = await getTicketAccessForToken(ticketId, accessToken);
+  if (
+    !access
+    || access.ticketId !== ticketId
+    || access.customerId !== Number(ticket.customerId)
+  ) {
+    return null;
+  }
+
+  return ticket;
+}
+
+function normalizeAttachment(attachment) {
+  if (!attachment) return null;
+
+  const name = String(attachment.name || '').trim().slice(0, 255);
+  const type = String(attachment.type || '').trim().slice(0, 100);
+  const data = typeof attachment.data === 'string' ? attachment.data : '';
+  const allowed = /^(image\/(jpeg|png|gif|webp)|application\/pdf|text\/plain|application\/(msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))$/i.test(type);
+  if (!name || !allowed || data.length > 4 * 1024 * 1024 || !/^data:[^;]+;base64,[A-Za-z0-9+/=]+$/.test(data)) {
+    throw new Error('Anexo inválido. Use imagem, PDF ou documento de até 3 MB.');
+  }
+
+  return { name, type, data };
+}
+
 function getSession(cookieHeader = '') {
   const cookie = cookieHeader.split(';').map((part) => part.trim())
     .find((part) => part.startsWith(`${SESSION_COOKIE}=`));
@@ -215,6 +245,58 @@ function queueAiReply(ticketId) {
   aiReplyQueues.set(ticketId, next);
 }
 
+async function persistAndBroadcastMessage({
+  ticketId,
+  ticket,
+  senderType,
+  senderId,
+  text,
+  attachment,
+  tempId
+}) {
+  const deliveryKey = tempId ? `${ticketId}:${String(tempId).slice(0, 100)}` : null;
+  let message = deliveryKey ? messageDeliveryCache.get(deliveryKey) : null;
+  const created = !message;
+
+  if (created) {
+    message = await store.createMessage({
+      ticketId,
+      senderType,
+      senderId,
+      text,
+      attachment
+    });
+    if (deliveryKey) {
+      messageDeliveryCache.set(deliveryKey, message);
+      if (messageDeliveryCache.size > 10000) {
+        messageDeliveryCache.delete(messageDeliveryCache.keys().next().value);
+      }
+    }
+
+    io.to(`ticket:${ticketId}`).emit('new-message', {
+      ...message,
+      tempId: tempId || null
+    });
+    if (senderType === 'CUSTOMER' && ticket.assignedAgentId) {
+      io.to(`agent:${ticket.assignedAgentId}`).emit('ticket:message', {
+        ticketId,
+        messageText: text,
+        customerId: ticket.customerId,
+        departmentId: ticket.departmentId
+      });
+    }
+    io.emit('tickets:updated');
+    if (senderType === 'CUSTOMER' && ticket.status === 'WAITING' && !ticket.assignedAgentId) {
+      queueAiReply(ticketId);
+    }
+  }
+
+  return {
+    created,
+    message: { ...message, tempId: tempId || null }
+  };
+}
+
 io.use((socket, next) => {
   const origin = socket.handshake.headers.origin;
   const host = socket.handshake.headers.host;
@@ -269,7 +351,7 @@ app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
   return requireSameOrigin(req, res, next);
 });
-app.use(express.json({ limit: '16kb' }));
+app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: false, limit: '8kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -293,6 +375,13 @@ const registrationRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { message: 'Muitas solicitações. Tente novamente mais tarde.' }
+});
+const customerMessageRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Limite de mensagens atingido. Aguarde um minuto.' }
 });
 app.use('/api', apiRateLimit);
 
@@ -773,6 +862,73 @@ app.get('/api/tickets/:id/messages', requireAgent, async (req, res) => {
   }
 });
 
+app.get('/api/tickets/:id/customer-messages', async (req, res) => {
+  try {
+    const ticketId = Number(req.params.id);
+    if (!Number.isSafeInteger(ticketId) || ticketId < 1) {
+      return res.status(400).json({ message: 'Chamado inválido.' });
+    }
+
+    const ticket = await getCustomerTicket(ticketId, req.get('x-ticket-token'));
+    if (!ticket) {
+      return res.status(403).json({ message: 'Acesso inválido a este chamado.' });
+    }
+
+    return res.json({
+      status: ticket.status,
+      departmentName: ticket.departmentName,
+      messages: await store.getMessages(ticketId)
+    });
+  } catch (error) {
+    return sendServerError(res, error, 'Falha ao carregar mensagens do colaborador', 'Não foi possível carregar as mensagens.');
+  }
+});
+
+app.post('/api/tickets/:id/customer-messages', customerMessageRateLimit, async (req, res) => {
+  try {
+    const ticketId = Number(req.params.id);
+    if (!Number.isSafeInteger(ticketId) || ticketId < 1) {
+      return res.status(400).json({ message: 'Chamado inválido.' });
+    }
+
+    const ticket = await getCustomerTicket(ticketId, req.get('x-ticket-token'));
+    if (!ticket) {
+      return res.status(403).json({ message: 'Acesso inválido a este chamado.' });
+    }
+    if (ticket.status === 'CLOSED') {
+      return res.status(409).json({ message: 'Este atendimento não está disponível para mensagens.' });
+    }
+
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body
+      : {};
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    let attachment;
+    try {
+      attachment = normalizeAttachment(body.attachment);
+    } catch (error) {
+      return res.status(400).json({ message: error.message });
+    }
+    if ((!text && !attachment) || text.length > 1000) {
+      return res.status(400).json({ message: 'Mensagem inválida ou maior que 1000 caracteres.' });
+    }
+
+    const tempId = typeof body.tempId === 'string' ? body.tempId.slice(0, 100) : null;
+    const result = await persistAndBroadcastMessage({
+      ticketId,
+      ticket,
+      senderType: 'CUSTOMER',
+      senderId: ticket.customerId,
+      text,
+      attachment,
+      tempId
+    });
+    return res.status(result.created ? 201 : 200).json(result.message);
+  } catch (error) {
+    return sendServerError(res, error, 'Falha ao enviar mensagem do colaborador', 'Não foi possível enviar a mensagem.');
+  }
+});
+
 io.on('connection', (socket) => {
   socket.data.customerTickets = new Set();
   let messageWindowStartedAt = Date.now();
@@ -911,50 +1067,23 @@ io.on('connection', (socket) => {
         senderId = ticket.customerId;
       }
 
-      let normalizedAttachment = null;
-      if (attachment) {
-        const name = String(attachment.name || '').trim().slice(0, 255);
-        const type = String(attachment.type || '').trim().slice(0, 100);
-        const data = typeof attachment.data === 'string' ? attachment.data : '';
-        const allowed = /^(image\/(jpeg|png|gif|webp)|application\/pdf|text\/plain|application\/(msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document))$/i.test(type);
-        if (!name || !allowed || data.length > 4 * 1024 * 1024 || !/^data:[^;]+;base64,[A-Za-z0-9+/=]+$/.test(data)) {
-          socket.emit('message:error', { message: 'Anexo inválido. Use imagem, PDF ou documento de até 3 MB.' });
-          return;
-        }
-        normalizedAttachment = { name, type, data };
+      let normalizedAttachment;
+      try {
+        normalizedAttachment = normalizeAttachment(attachment);
+      } catch (error) {
+        socket.emit('message:error', { message: error.message });
+        return;
       }
 
-      const deliveryKey = tempId ? `${parsedTicketId}:${String(tempId).slice(0, 100)}` : null;
-      let message = deliveryKey ? messageDeliveryCache.get(deliveryKey) : null;
-      if (!message) {
-        message = await store.createMessage({
-          ticketId: parsedTicketId,
-          senderType: normalizedSenderType,
-          senderId,
-          text: trimmedText,
-          attachment: normalizedAttachment
-        });
-        if (deliveryKey) {
-          messageDeliveryCache.set(deliveryKey, message);
-          if (messageDeliveryCache.size > 10000) {
-            messageDeliveryCache.delete(messageDeliveryCache.keys().next().value);
-          }
-        }
-      }
-
-      io.to(`ticket:${parsedTicketId}`).emit('new-message', { ...message, tempId: tempId || null });
-      if (normalizedSenderType === 'CUSTOMER' && ticket.assignedAgentId) {
-        io.to(`agent:${ticket.assignedAgentId}`).emit('ticket:message', {
-          ticketId: parsedTicketId,
-          messageText: trimmedText,
-          customerId: ticket.customerId,
-          departmentId: ticket.departmentId
-        });
-      }
-      io.emit('tickets:updated');
-      if (normalizedSenderType === 'CUSTOMER' && ticket.status === 'WAITING' && !ticket.assignedAgentId) {
-        queueAiReply(parsedTicketId);
-      }
+      await persistAndBroadcastMessage({
+        ticketId: parsedTicketId,
+        ticket,
+        senderType: normalizedSenderType,
+        senderId,
+        text: trimmedText,
+        attachment: normalizedAttachment,
+        tempId
+      });
     } catch (error) {
       console.error('Falha ao enviar mensagem:', safeErrorDetail(error));
       socket.emit('message:error', { message: 'Não foi possível enviar a mensagem.' });
