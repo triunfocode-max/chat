@@ -1,0 +1,148 @@
+body.customer-app,
+body.agent-app {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+body.customer-app {
+  background: linear-gradient(180deg, #008069 0, #008069 180px, #d9dbd5 180px, #d9dbd5 100%);
+}
+
+body.agent-app {
+  background: #e9edef;
+}
+
+.customer-app .brand-gradient,
+.agent-app .brand-gradient {
+  background: #008069;
+}
+
+.customer-app .soft-shadow {
+  box-shadow: 0 10px 32px rgb(11 20 26 / 14%);
+}
+
+.customer-app .text-sky-700 {
+  color: #008069;
+}
+
+.customer-app [class~="bg-sky-700"],
+.agent-app [class~="bg-sky-700"] {
+  background-color: #008069;
+}
+
+.customer-app [class~="hover:bg-sky-800"]:hover,
+.agent-app [class~="hover:bg-sky-800"]:hover {
+  background-color: #006c5a;
+}
+
+.customer-app input:focus,
+.customer-app select:focus,
+.agent-app input:focus,
+.agent-app select:focus,
+.agent-app textarea:focus {
+  border-color: #25a18e;
+  --tw-ring-color: rgb(37 211 102 / 20%);
+}
+
+.customer-app #rolePanel {
+  border-radius: 1.25rem;
+  background: #fff;
+  padding: 2rem;
+}
+
+.customer-app #rolePanel button,
+.customer-app #rolePanel a {
+  box-shadow: 0 1px 2px rgb(11 20 26 / 10%);
+  transition: box-shadow 150ms ease, transform 150ms ease;
+}
+
+.customer-app #rolePanel button:hover,
+.customer-app #rolePanel a:hover {
+  border-color: #25d366;
+  box-shadow: 0 8px 22px rgb(11 20 26 / 12%);
+}
+
+.customer-app #formPanel,
+.customer-app #chatPanel {
+  border-color: #d1d7db;
+  border-radius: 0.75rem;
+  box-shadow: 0 10px 32px rgb(11 20 26 / 16%);
+}
+
+.customer-app #chatPanel > div:first-child {
+  background: #f0f2f5;
+}
+
+.customer-app #chatMessages,
+.agent-app #drawerMessages {
+  background-color: #efeae2;
+  background-image: radial-gradient(rgb(90 80 65 / 5%) 0.7px, transparent 0.7px);
+  background-size: 13px 13px;
+}
+
+.customer-app #chatMessages > div,
+.agent-app #drawerMessages > div:not([data-empty-messages]) {
+  border: 0;
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 1px rgb(11 20 26 / 13%);
+}
+
+.customer-app #chatMessages > div.ml-auto,
+.agent-app #drawerMessages > div.ml-auto {
+  background: #d9fdd3;
+  color: #111b21;
+}
+
+.customer-app #chatMessages > div.mr-auto,
+.agent-app #drawerMessages > div.mr-auto {
+  background: #fff;
+  color: #111b21;
+}
+
+.customer-app #chatMessages > div.ml-auto > div:first-child,
+.customer-app #chatMessages > div.mr-auto > div:first-child,
+.agent-app #drawerMessages > div.ml-auto > div:first-child,
+.agent-app #drawerMessages > div.mr-auto > div:first-child {
+  color: #667781;
+}
+
+.customer-app #chatForm,
+.agent-app #agentChatForm {
+  background: #f0f2f5;
+}
+
+.customer-app #chatForm > input[type="text"],
+.agent-app #agentChatForm > input[type="text"] {
+  border: 0;
+  border-radius: 9999px;
+  background: #fff;
+}
+
+.customer-app #chatForm > button[type="submit"],
+.agent-app #agentChatForm > button[type="submit"] {
+  border-radius: 9999px;
+  background: #008069;
+}
+
+.customer-app #chatForm > button[type="submit"]:hover,
+.agent-app #agentChatForm > button[type="submit"]:hover {
+  background: #006c5a;
+}
+
+.agent-app #dashboardPanel main > div {
+  border-color: #d1d7db;
+  border-radius: 0.75rem;
+}
+
+.agent-app #ticketList > button {
+  border-radius: 0.5rem;
+}
+
+.agent-app #conversationPanel > header {
+  border-color: #d1d7db;
+}
+
+@media (max-width: 640px) {
+  .customer-app #rolePanel {
+    padding: 1.25rem;
+  }
+}
